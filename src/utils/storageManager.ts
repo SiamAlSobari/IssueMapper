@@ -18,7 +18,7 @@ export interface IssueFilters {
 const SECRET_KEYS = ['openai-api-key', 'gemini-api-key', 'groq-api-key'] as const;
 type SecretKey = (typeof SECRET_KEYS)[number];
 
-const GLOBAL_STATE_KEYS = ['activeProvider', 'selectedModel'] as const;
+const GLOBAL_STATE_KEYS = ['activeProvider', 'selectedModel', 'ollamaHostUrl'] as const;
 type GlobalStateKey = (typeof GLOBAL_STATE_KEYS)[number];
 
 const WORKSPACE_STATE_KEYS = ['cachedIssues', 'lastSyncedTime', 'issueFilters'] as const;
@@ -61,6 +61,14 @@ export class StorageManager {
 
 	async setSelectedModel(model: string): Promise<void> {
 		await this._globalState.update('selectedModel', model);
+	}
+
+	getOllamaHostUrl(): string {
+		return this._globalState.get<string>('ollamaHostUrl') ?? 'http://localhost:11434';
+	}
+
+	async setOllamaHostUrl(url: string): Promise<void> {
+		await this._globalState.update('ollamaHostUrl', url);
 	}
 
 	getCachedIssues(): GitHubIssue[] {
