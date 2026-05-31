@@ -1,0 +1,92 @@
+:root {
+  --panel-bg: var(--vscode-sideBar-background);
+  --panel-fg: var(--vscode-sideBar-foreground);
+  --btn-bg: var(--vscode-button-background);
+  --btn-hover: var(--vscode-button-hoverBackground);
+  --btn-fg: var(--vscode-button-foreground);
+  --input-border: var(--vscode-input-border);
+  --input-bg: var(--vscode-input-background);
+  --input-fg: var(--vscode-input-foreground);
+  --badge-bg: var(--vscode-badge-background);
+  --badge-fg: var(--vscode-badge-foreground);
+  --focus-border: var(--vscode-focusBorder);
+  --font-family: var(--vscode-font-family);
+  --font-size: var(--vscode-font-size);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  font-size: var(--font-size, 13px);
+  background: var(--panel-bg);
+  color: var(--panel-fg);
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+input, textarea, select {
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--focus-border);
+}
+
+button {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: none;
+  border-radius: 2px;
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--btn-hover);
+}
+
+a {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+}
