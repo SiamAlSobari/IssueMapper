@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import SettingsPanel from './components/SettingsPanel';
 
 // Tipe data issue sesuai backend
 interface GitHubIssue {
@@ -123,9 +124,13 @@ export default function App() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [submitSuccessMsg, setSubmitSuccessMsg] = useState('');
   
+  // State navigasi halaman
+  const [showSettings, setShowSettings] = useState(false);
+
   // State metadata
   const [repoDetected, setRepoDetected] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [noIssues, setNoIssues] = useState(false);
 
   // Ref untuk scroll otomatis textarea ke bawah setelah Quick Suggest
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -135,18 +140,58 @@ export default function App() {
     if (vscode) {
       vscode.postMessage({ command: 'getInitialState' });
       vscode.postMessage({ command: 'getIssues' });
+    } else {
+      // Jalankan simulasi data jika di luar VS Code (browser standalone)
+      setTimeout(() => {
+        const fallbackIssues: GitHubIssue[] = [
+          {
+            number: 101,
+            title: "Bug: Login token expiration throws 401 unhandled exception",
+            body: "When the user session expires, clicking refresh crashes the application with a 401 Unauthorized status code instead of redirecting to /login.",
+            state: "open",
+            labels: [
+              { name: "bug", color: "d73a4a" },
+              { name: "high-priority", color: "b60205" }
+            ]
+          },
+          {
+            number: 102,
+            title: "Feature: Add Google OAuth option to authentication settings",
+            body: "We need to allow users to sign in with Google OAuth directly from the settings panel.",
+            state: "open",
+            labels: [
+              { name: "enhancement", color: "a2eeef" }
+            ]
+          },
+          {
+            number: 103,
+            title: "Documentation: Update README with setup and deployment instructions",
+            body: "The README file is currently empty. Please write complete steps to install dependencies, run the server, and deploy the VS Code extension.",
+            state: "open",
+            labels: [
+              { name: "documentation", color: "0075ca" }
+            ]
+          }
+        ];
+        setIssues(fallbackIssues);
+        setRepoDetected(true);
+        setAuthenticated(false);
+        setLoading(false);
+      }, 500);
     }
 
     const handleMessage = (event: MessageEvent) => {
       const message = event.data;
       switch (message.command) {
         case 'issuesLoaded':
-          setIssues(message.issues);
-          setRepoDetected(message.repoDetected);
-          setAuthenticated(message.authenticated);
+          setIssues(message.issues || []);
+          setRepoDetected(!!message.repoDetected);
+          setAuthenticated(!!message.authenticated);
           setLoading(false);
+          setNoIssues(!message.fromCache && message.issues && message.issues.length === 0);
           break;
         case 'refreshTriggered':
+          setNoIssues(false);
           handleRefresh();
           break;
         case 'initialState':
@@ -280,6 +325,7 @@ export default function App() {
   const handleRefresh = () => {
     setLoading(true);
     setSelectedIssue(null);
+    setNoIssues(false);
     if (vscode) {
       vscode.postMessage({ command: 'refreshIssues' });
     } else {
@@ -299,25 +345,32 @@ export default function App() {
   // Kumpulkan label unik
   const allLabels = useMemo(() => {
     const labelsSet = new Set<string>();
-    issues.forEach(issue => {
-      issue.labels.forEach(label => {
-        labelsSet.add(label.name);
-      });
+    const safeIssues = Array.isArray(issues) ? issues : [];
+    safeIssues.forEach(issue => {
+      if (issue && Array.isArray(issue.labels)) {
+        issue.labels.forEach(label => {
+          if (label && label.name) {
+            labelsSet.add(label.name);
+          }
+        });
+      }
     });
     return Array.from(labelsSet);
   }, [issues]);
 
   // Saring issue list
   const filteredIssues = useMemo(() => {
-    return issues.filter(issue => {
+    const safeIssues = Array.isArray(issues) ? issues : [];
+    return safeIssues.filter(issue => {
+      if (!issue) return false;
       const matchesSearch = 
-        issue.title.toLowerCase().includes(searchText.toLowerCase()) ||
-        issue.body.toLowerCase().includes(searchText.toLowerCase()) ||
-        issue.number.toString().includes(searchText);
+        (issue.title || '').toLowerCase().includes(searchText.toLowerCase()) ||
+        (issue.body || '').toLowerCase().includes(searchText.toLowerCase()) ||
+        (issue.number || '').toString().includes(searchText);
       
       const matchesLabel = 
         selectedLabel === 'all' || 
-        issue.labels.some(l => l.name === selectedLabel);
+        (Array.isArray(issue.labels) && issue.labels.some(l => l && l.name === selectedLabel));
       
       return matchesSearch && matchesLabel;
     });
@@ -370,7 +423,9 @@ export default function App() {
     );
   };
 
-  return (
+  return showSettings ? (
+    <SettingsPanel vscode={vscode} onClose={() => setShowSettings(false)} />
+  ) : (
     <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', height: '100vh', gap: '12px', overflow: 'hidden' }}>
       
       {/* HEADER UTAMA */}
@@ -381,7 +436,25 @@ export default function App() {
           </svg>
           Issue Explorer
         </h2>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--panel-fg)',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              opacity: 0.7
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path fillRule="evenodd" d="M3.5 9.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4.5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4.5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z" />
+            </svg>
+          </button>
           <button 
             onClick={handleRefresh} 
             title="Refresh Issues"
@@ -407,33 +480,45 @@ export default function App() {
       {/* DETEKSI STATUS REPOSITORI */}
       {!loading && !selectedIssue && (
         <div style={{ 
-          fontSize: '11px', 
-          color: 'var(--vscode-descriptionForeground)', 
-          background: 'rgba(255, 255, 255, 0.03)', 
-          padding: '6px 8px', 
-          borderRadius: '4px', 
+          fontSize: '11.5px', 
+          color: 'var(--vscode-sideBar-foreground)', 
+          background: 'var(--vscode-welcomePage-tileBackground, rgba(255, 255, 255, 0.02))', 
+          padding: '10px 12px', 
+          borderRadius: '6px', 
+          border: '1px solid var(--vscode-panel-border, var(--input-border))',
           display: 'flex', 
           flexDirection: 'column',
-          gap: '4px',
-          flexShrink: 0
+          gap: '8px',
+          flexShrink: 0,
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>{repoDetected ? 'Git repo terdeteksi' : 'Bukan Git repo (Mock Mode)'}</span>
+            <span style={{ fontWeight: 500 }}>Status Repositori</span>
             <span style={{ 
-              width: '8px', 
-              height: '8px', 
-              borderRadius: '50%', 
-              backgroundColor: authenticated ? '#3fb950' : '#d29922',
-              display: 'inline-block'
-            }} title={authenticated ? 'Terhubung dengan GitHub' : 'Offline / Mock Mode'} />
+              fontSize: '10px',
+              padding: '2px 6px',
+              borderRadius: '10px',
+              fontWeight: 'bold',
+              backgroundColor: repoDetected ? 'rgba(0, 122, 255, 0.1)' : 'rgba(255, 165, 0, 0.1)',
+              color: repoDetected ? '#007acc' : '#ffa500',
+              border: `1px solid ${repoDetected ? 'rgba(0,122,255,0.2)' : 'rgba(255,165,0,0.2)'}`
+            }}>
+              {repoDetected ? 'Git Terdeteksi' : 'Mode Simulasi'}
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', marginTop: '2px' }}>
-            <span>{authenticated ? 'Terhubung ke GitHub' : 'Otentikasi GitHub Belum Aktif'}</span>
-            {!authenticated && (
-              <a 
-                href="#"
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px', marginTop: '2px' }}>
+            <span style={{ opacity: 0.8 }}>Koneksi GitHub</span>
+            {authenticated ? (
+              <span style={{ color: '#3fb950', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3fb950', display: 'inline-block' }} />
+                Terhubung
+              </span>
+            ) : (
+              <button 
                 onClick={(e) => {
                   e.preventDefault();
+                  console.log("Mengirim perintah loginGitHub...");
                   if (vscode) {
                     vscode.postMessage({ command: 'loginGitHub' });
                   } else {
@@ -441,13 +526,21 @@ export default function App() {
                   }
                 }}
                 style={{ 
-                  color: 'var(--vscode-textLink-foreground)', 
-                  textDecoration: 'none', 
-                  fontWeight: 'bold' 
+                  background: 'var(--vscode-button-background, #007acc)',
+                  color: 'var(--vscode-button-foreground, #ffffff)',
+                  border: 'none', 
+                  borderRadius: '3px',
+                  padding: '4px 10px',
+                  fontSize: '10.5px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s'
                 }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--vscode-button-hoverBackground, #0062a3)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'var(--vscode-button-background, #007acc)'}
               >
-                Hubungkan
-              </a>
+                Hubungkan Akun
+              </button>
             )}
           </div>
         </div>
@@ -768,15 +861,47 @@ export default function App() {
               paddingRight: '2px'
             }}>
               {filteredIssues.length === 0 ? (
-                <div style={{ 
-                  textAlign: 'center', 
-                  color: 'var(--vscode-descriptionForeground)', 
-                  padding: '24px 8px',
+                <div style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  textAlign: 'center', color: 'var(--vscode-descriptionForeground)',
+                  padding: '32px 16px', gap: '12px',
                   border: '1px dashed var(--input-border)',
-                  borderRadius: '4px',
-                  fontSize: '12px'
+                  borderRadius: '6px', fontSize: '12px',
+                  flex: 1, marginTop: '8px'
                 }}>
-                  Tidak ada issue yang cocok dengan saringan.
+                  {noIssues && issues.length === 0 && !searchText && selectedLabel === 'all' ? (
+                    <>
+                      <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.3 }}>
+                        <path fillRule="evenodd" d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8zm9 3a1 1 0 11-2 0 1 1 0 012 0zm-.25-6.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" />
+                      </svg>
+                      <span style={{ fontWeight: 'bold', fontSize: '13px' }}>Tidak Ada Isu Terbuka</span>
+                      <span style={{ fontSize: '11px', opacity: 0.7, lineHeight: 1.4 }}>
+                        Repositori ini tidak memiliki isu yang aktif.
+                        <br />Buat isu baru di GitHub untuk memulai.
+                      </span>
+                    </>
+                  ) : noIssues ? (
+                    <>
+                      <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.3 }}>
+                        <path fillRule="evenodd" d="M2.5 8a5.5 5.5 0 1111 0 5.5 5.5 0 01-11 0zM8 1a7 7 0 100 14A7 7 0 008 1zm3.36 3.36a.75.75 0 010 1.06l-2.25 2.25a.75.75 0 01-1.06 0L5.8 5.36a.75.75 0 111.06-1.06l.89.89V1.75a.75.75 0 011.5 0v3.44l.89-.89a.75.75 0 011.06 0z"/>
+                      </svg>
+                      <span style={{ fontWeight: 'bold', fontSize: '13px' }}>Isu Tidak Ditemukan</span>
+                      <span style={{ fontSize: '11px', opacity: 0.7, lineHeight: 1.4 }}>
+                        Tidak ada isu yang berhasil dimuat dari repositori ini.
+                        <br />Coba refresh atau periksa koneksi GitHub Anda.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.25 }}>
+                        <path fillRule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06l-3.04-3.04z" />
+                      </svg>
+                      <span style={{ fontWeight: 'bold', fontSize: '13px' }}>Tidak Ada Hasil</span>
+                      <span style={{ fontSize: '11px', opacity: 0.7, lineHeight: 1.4 }}>
+                        Tidak ada isu yang cocok dengan filter atau pencarian saat ini.
+                      </span>
+                    </>
+                  )}
                 </div>
               ) : (
                 filteredIssues.map(issue => (

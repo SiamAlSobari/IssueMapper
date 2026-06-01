@@ -76,38 +76,44 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		}
 		authenticated = true;
 
-		// 3. Panggil API GitHub menggunakan GraphQL API untuk efisiensi
 		const { graphql } = await import('@octokit/graphql');
-		const response = await graphql<{ repository: any }>(
-			`
-			query ($owner: String!, $repo: String!, $limit: Int!) {
-				repository(owner: $owner, name: $repo) {
-					issues(first: $limit, orderBy: {field: CREATED_AT, direction: DESC}) {
-						nodes {
-							number
-							title
-							body
-							state
-							labels(first: 10) {
-								nodes {
-									name
-									color
+		
+		// Gunakan Promise.race dengan timeout 5 detik agar tidak menggantung jika jaringan bermasalah
+		const response = await Promise.race([
+			graphql<{ repository: any }>(
+				`
+				query ($owner: String!, $repo: String!, $limit: Int!) {
+					repository(owner: $owner, name: $repo) {
+						issues(first: $limit, orderBy: {field: CREATED_AT, direction: DESC}) {
+							nodes {
+								number
+								title
+								body
+								state
+								labels(first: 10) {
+									nodes {
+										name
+										color
+									}
 								}
 							}
 						}
 					}
 				}
-			}
-			`,
-			{
-				owner: repoInfo.owner,
-				repo: repoInfo.repo,
-				limit: 50,
-				headers: {
-					authorization: `token ${session.accessToken}`
+				`,
+				{
+					owner: repoInfo.owner,
+					repo: repoInfo.repo,
+					limit: 50,
+					headers: {
+						authorization: `token ${session.accessToken}`
+					}
 				}
-			}
-		);
+			),
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("Timeout memuat data dari GitHub API (5 detik).")), 5000)
+			)
+		]);
 
 		// 4. Format hasil mapping GraphQL
 		if (response && response.repository && response.repository.issues) {
