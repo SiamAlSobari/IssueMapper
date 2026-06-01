@@ -9,6 +9,7 @@ const MOCK_ISSUES: GitHubIssue[] = [
 		title: "Bug: Login token expiration throws 401 unhandled exception",
 		body: "When the user session expires, clicking refresh crashes the application with a 401 Unauthorized status code instead of redirecting to /login.",
 		state: "open",
+		author: "Colorful",
 		labels: [
 			{ name: "bug", color: "d73a4a" },
 			{ name: "high-priority", color: "b60205" }
@@ -19,6 +20,7 @@ const MOCK_ISSUES: GitHubIssue[] = [
 		title: "Feature: Add Google OAuth option to authentication settings",
 		body: "We need to allow users to sign in with Google OAuth directly from the settings panel.",
 		state: "open",
+		author: "johndoe",
 		labels: [
 			{ name: "enhancement", color: "a2eeef" }
 		]
@@ -28,6 +30,7 @@ const MOCK_ISSUES: GitHubIssue[] = [
 		title: "Documentation: Update README with setup and deployment instructions",
 		body: "The README file is currently empty. Please write complete steps to install dependencies, run the server, and deploy the VS Code extension.",
 		state: "open",
+		author: "Colorful",
 		labels: [
 			{ name: "documentation", color: "0075ca" }
 		]
@@ -37,6 +40,7 @@ const MOCK_ISSUES: GitHubIssue[] = [
 		title: "Refactor: Move database connections to centralized prisma.ts instance",
 		body: "To prevent exceeding PostgreSQL connection pool limit, we should instantiate PrismaClient once and export it from a common lib folder.",
 		state: "closed",
+		author: "janedoe",
 		labels: [
 			{ name: "refactor", color: "cfd3d7" }
 		]
@@ -47,7 +51,7 @@ const MOCK_ISSUES: GitHubIssue[] = [
  * Mengambil daftar issue dari GitHub menggunakan GraphQL API.
  * Mengambil hanya kolom esensial: number, title, body, state, dan labels.
  */
-export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<{ issues: GitHubIssue[]; fromCache: boolean; repoDetected: boolean; authenticated: boolean }> {
+export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<{ issues: GitHubIssue[]; currentUser?: string; fromCache: boolean; repoDetected: boolean; authenticated: boolean }> {
 	let authenticated = false;
 	let repoDetected = false;
 
@@ -57,6 +61,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		if (!repoInfo) {
 			return {
 				issues: MOCK_ISSUES,
+				currentUser: 'Colorful',
 				fromCache: false,
 				repoDetected: false,
 				authenticated: false
@@ -69,6 +74,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		if (!session) {
 			return {
 				issues: MOCK_ISSUES,
+				currentUser: 'Colorful',
 				fromCache: false,
 				repoDetected: true,
 				authenticated: false
@@ -80,9 +86,12 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		
 		// Gunakan Promise.race dengan timeout 5 detik agar tidak menggantung jika jaringan bermasalah
 		const response = await Promise.race([
-			graphql<{ repository: any }>(
+			graphql<{ repository: any; viewer: { login: string } }>(
 				`
 				query ($owner: String!, $repo: String!, $limit: Int!) {
+					viewer {
+						login
+					}
 					repository(owner: $owner, name: $repo) {
 						issues(first: $limit, orderBy: {field: CREATED_AT, direction: DESC}) {
 							nodes {
@@ -90,6 +99,9 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 								title
 								body
 								state
+								author {
+									login
+								}
 								labels(first: 10) {
 									nodes {
 										name
@@ -117,11 +129,13 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 
 		// 4. Format hasil mapping GraphQL
 		if (response && response.repository && response.repository.issues) {
+			const currentUser = response.viewer?.login;
 			const issues: GitHubIssue[] = response.repository.issues.nodes.map((node: any) => ({
 				number: node.number,
 				title: node.title,
 				body: node.body || '',
 				state: node.state.toLowerCase(), // GraphQL menghasilkan status kapital (OPEN/CLOSED), ubah ke lowercase
+				author: node.author?.login || 'ghost',
 				labels: (node.labels?.nodes || []).map((l: any) => ({
 					name: l.name || '',
 					color: l.color || 'cfd3d7'
@@ -130,6 +144,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 
 			return {
 				issues,
+				currentUser,
 				fromCache: false,
 				repoDetected: true,
 				authenticated: true
@@ -138,6 +153,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 
 		return {
 			issues: MOCK_ISSUES,
+			currentUser: 'Colorful',
 			fromCache: false,
 			repoDetected: true,
 			authenticated: true
@@ -147,6 +163,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		console.error("Gagal memuat issue dari GitHub GraphQL API:", error);
 		return {
 			issues: MOCK_ISSUES,
+			currentUser: 'Colorful',
 			fromCache: false,
 			repoDetected: repoDetected,
 			authenticated: authenticated
@@ -207,5 +224,53 @@ export async function updateGitHubIssueState(issueNumber: number, state: 'open' 
 	} catch (error) {
 		console.error(`Gagal mengubah status issue #${issueNumber} menjadi ${state}:`, error);
 		return false;
+	}
+}
+
+/**
+ * Membuat issue baru di GitHub menggunakan REST API.
+ * POST /repos/{owner}/{repo}/issues
+ */
+export async function createGitHubIssue(title: string, body: string): Promise<GitHubIssue | null> {
+	try {
+		const repoInfo = await getGitHubRepositoryInfo();
+		if (!repoInfo) return null;
+
+		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
+		if (!session) return null;
+
+		const { Octokit } = await import('@octokit/rest');
+		const octokit = new Octokit({ auth: session.accessToken });
+
+		const response = await octokit.issues.create({
+			owner: repoInfo.owner,
+			repo: repoInfo.repo,
+			title,
+			body
+		});
+
+		// Dapatkan username authenticated user
+		let username = 'ghost';
+		try {
+			const userRes = await octokit.users.getAuthenticated();
+			username = userRes.data.login;
+		} catch (uErr) {
+			console.error("Gagal mendapatkan username terotentikasi:", uErr);
+		}
+
+		return {
+			number: response.data.number,
+			title: response.data.title,
+			body: response.data.body || '',
+			state: response.data.state,
+			author: username,
+			labels: response.data.labels.map((l: any) => ({
+				name: typeof l === 'string' ? l : (l.name || ''),
+				color: typeof l === 'string' ? 'cfd3d7' : (l.color || 'cfd3d7')
+			}))
+		};
+	} catch (error) {
+		console.error("Gagal membuat issue baru:", error);
+		return null;
 	}
 }

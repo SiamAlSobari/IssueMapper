@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import SettingsPanel from './components/SettingsPanel';
+import CreateIssuePanel from './components/CreateIssuePanel';
 
 // Tipe data issue sesuai backend
 interface GitHubIssue {
@@ -8,6 +9,7 @@ interface GitHubIssue {
   body: string;
   state: string;
   labels: { name: string; color: string }[];
+  author?: string;
 }
 
 interface AIFileRecommendation {
@@ -123,6 +125,7 @@ export default function App() {
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [submittingComment, setSubmittingComment] = useState(false);
   const [submitSuccessMsg, setSubmitSuccessMsg] = useState('');
+  const [togglingState, setTogglingState] = useState(false);
   
   // State navigasi halaman
   const [showSettings, setShowSettings] = useState(false);
@@ -131,6 +134,16 @@ export default function App() {
   const [repoDetected, setRepoDetected] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [noIssues, setNoIssues] = useState(false);
+  const [currentUser, setCurrentUser] = useState('Colorful');
+
+  // Filter creator
+  const [creatorFilter, setCreatorFilter] = useState<'all' | 'me' | 'others'>('all');
+
+  // State Form Pembuatan Issue
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newIssueTitle, setNewIssueTitle] = useState('');
+  const [newIssueBody, setNewIssueBody] = useState('');
+  const [creatingIssue, setCreatingIssue] = useState(false);
 
   // Ref untuk scroll otomatis textarea ke bawah setelah Quick Suggest
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -149,6 +162,7 @@ export default function App() {
             title: "Bug: Login token expiration throws 401 unhandled exception",
             body: "When the user session expires, clicking refresh crashes the application with a 401 Unauthorized status code instead of redirecting to /login.",
             state: "open",
+            author: "Colorful",
             labels: [
               { name: "bug", color: "d73a4a" },
               { name: "high-priority", color: "b60205" }
@@ -159,6 +173,7 @@ export default function App() {
             title: "Feature: Add Google OAuth option to authentication settings",
             body: "We need to allow users to sign in with Google OAuth directly from the settings panel.",
             state: "open",
+            author: "johndoe",
             labels: [
               { name: "enhancement", color: "a2eeef" }
             ]
@@ -168,6 +183,7 @@ export default function App() {
             title: "Documentation: Update README with setup and deployment instructions",
             body: "The README file is currently empty. Please write complete steps to install dependencies, run the server, and deploy the VS Code extension.",
             state: "open",
+            author: "Colorful",
             labels: [
               { name: "documentation", color: "0075ca" }
             ]
@@ -185,10 +201,24 @@ export default function App() {
       switch (message.command) {
         case 'issuesLoaded':
           setIssues(message.issues || []);
+          if (message.currentUser) {
+            setCurrentUser(message.currentUser);
+          }
           setRepoDetected(!!message.repoDetected);
           setAuthenticated(!!message.authenticated);
           setLoading(false);
           setNoIssues(!message.fromCache && message.issues && message.issues.length === 0);
+          break;
+        case 'createIssueResult':
+          setCreatingIssue(false);
+          if (message.success) {
+            setIssues(message.updatedIssues);
+            setNewIssueTitle('');
+            setNewIssueBody('');
+            setShowCreateForm(false);
+            setSubmitSuccessMsg('Issue baru berhasil dibuat!');
+            setTimeout(() => setSubmitSuccessMsg(''), 3000);
+          }
           break;
         case 'refreshTriggered':
           setNoIssues(false);
@@ -225,6 +255,15 @@ export default function App() {
             setCommentText('');
             setSubmittingComment(false);
             setSubmitSuccessMsg(message.close ? 'Komentar dikirim & issue ditutup!' : 'Komentar berhasil dikirim!');
+            setTimeout(() => setSubmitSuccessMsg(''), 3000);
+          }
+          break;
+        case 'toggleIssueStateResult':
+          setTogglingState(false);
+          if (message.success) {
+            setIssues(message.updatedIssues);
+            setSelectedIssue(prev => prev ? { ...prev, state: message.state } : null);
+            setSubmitSuccessMsg(message.state === 'closed' ? 'Issue ditutup!' : 'Issue dibuka kembali!');
             setTimeout(() => setSubmitSuccessMsg(''), 3000);
           }
           break;
@@ -321,6 +360,68 @@ export default function App() {
     }
   };
 
+  // Mengubah status issue secara instan tanpa menulis komentar
+  const handleToggleIssueState = () => {
+    if (!selectedIssue) return;
+    const nextState = selectedIssue.state === 'open' ? 'closed' : 'open';
+    setTogglingState(true);
+    if (vscode) {
+      vscode.postMessage({
+        command: 'toggleIssueState',
+        number: selectedIssue.number,
+        state: nextState
+      });
+    } else {
+      // Simulasi respon sukses di standalone browser
+      setTimeout(() => {
+        const updated = issues.map(i => {
+          if (i.number === selectedIssue.number) {
+            return { ...i, state: nextState };
+          }
+          return i;
+        });
+        setIssues(updated);
+        setSelectedIssue(prev => prev ? { ...prev, state: nextState } : null);
+        setTogglingState(false);
+        setSubmitSuccessMsg(nextState === 'closed' ? 'Issue berhasil ditutup!' : 'Issue berhasil dibuka kembali!');
+        setTimeout(() => setSubmitSuccessMsg(''), 3000);
+      }, 800);
+    }
+  };
+
+  // Membuat issue baru di GitHub
+  const handleCreateIssue = () => {
+    if (!newIssueTitle.trim()) return;
+    setCreatingIssue(true);
+    if (vscode) {
+      vscode.postMessage({
+        command: 'createIssue',
+        title: newIssueTitle,
+        body: newIssueBody
+      });
+    } else {
+      // Simulasi pembuatan issue di standalone browser
+      setTimeout(() => {
+        const newIssueObj: GitHubIssue = {
+          number: Math.floor(Math.random() * 1000) + 200,
+          title: newIssueTitle,
+          body: newIssueBody,
+          state: 'open',
+          author: currentUser,
+          labels: []
+        };
+        const updated = [newIssueObj, ...issues];
+        setIssues(updated);
+        setNewIssueTitle('');
+        setNewIssueBody('');
+        setShowCreateForm(false);
+        setCreatingIssue(false);
+        setSubmitSuccessMsg('Issue baru berhasil dibuat!');
+        setTimeout(() => setSubmitSuccessMsg(''), 3000);
+      }, 800);
+    }
+  };
+
   // Handler refresh manual
   const handleRefresh = () => {
     setLoading(true);
@@ -372,9 +473,16 @@ export default function App() {
         selectedLabel === 'all' || 
         (Array.isArray(issue.labels) && issue.labels.some(l => l && l.name === selectedLabel));
       
-      return matchesSearch && matchesLabel;
+      let matchesCreator = true;
+      if (creatorFilter === 'me') {
+        matchesCreator = !!issue.author && issue.author.toLowerCase() === currentUser.toLowerCase();
+      } else if (creatorFilter === 'others') {
+        matchesCreator = !issue.author || issue.author.toLowerCase() !== currentUser.toLowerCase();
+      }
+      
+      return matchesSearch && matchesLabel && matchesCreator;
     });
-  }, [issues, searchText, selectedLabel]);
+  }, [issues, searchText, selectedLabel, creatorFilter, currentUser]);
 
   // Render badge status
   const renderStatusBadge = (state: string) => {
@@ -425,6 +533,16 @@ export default function App() {
 
   return showSettings ? (
     <SettingsPanel vscode={vscode} onClose={() => setShowSettings(false)} />
+  ) : showCreateForm ? (
+    <CreateIssuePanel
+      onClose={() => setShowCreateForm(false)}
+      onSubmit={handleCreateIssue}
+      title={newIssueTitle}
+      setTitle={setNewIssueTitle}
+      body={newIssueBody}
+      setBody={setNewIssueBody}
+      creating={creatingIssue}
+    />
   ) : (
     <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', height: '100vh', gap: '12px', overflow: 'hidden' }}>
       
@@ -437,6 +555,28 @@ export default function App() {
           Issue Explorer
         </h2>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {!selectedIssue && (
+            <button
+              onClick={() => setShowCreateForm(true)}
+              title="Buat Issue Baru"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--vscode-textLink-foreground, #007acc)',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'opacity 0.2s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
+              onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path fillRule="evenodd" d="M8 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 018 2z" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={() => setShowSettings(true)}
             title="Settings"
@@ -551,8 +691,8 @@ export default function App() {
       {selectedIssue ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, overflowY: 'auto', paddingRight: '2px' }}>
           
-          {/* Tombol Back */}
-          <div style={{ flexShrink: 0 }}>
+          {/* Tombol Back & Quick Action */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
             <button 
               onClick={() => setSelectedIssue(null)}
               style={{
@@ -564,13 +704,80 @@ export default function App() {
                 gap: '4px',
                 padding: '4px 8px',
                 fontSize: '11px',
-                borderRadius: '2px'
+                borderRadius: '2px',
+                cursor: 'pointer'
               }}
             >
               <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                 <path fillRule="evenodd" d="M7.78 12.53a.75.75 0 01-1.06 0L2.47 8.28a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 1.06L4.81 7h7.44a.75.75 0 010 1.5H4.81l2.97 2.97a.75.75 0 010 1.06z" />
               </svg>
               Kembali
+            </button>
+
+            {/* Instant State Toggle Button */}
+            <button
+              onClick={handleToggleIssueState}
+              disabled={togglingState || submittingComment}
+              style={{
+                background: selectedIssue.state.toLowerCase() === 'open' 
+                  ? 'rgba(248, 81, 73, 0.12)' 
+                  : 'rgba(46, 160, 67, 0.12)',
+                color: selectedIssue.state.toLowerCase() === 'open' ? '#f85149' : '#3fb950',
+                border: `1px solid ${selectedIssue.state.toLowerCase() === 'open' ? 'rgba(248, 81, 73, 0.25)' : 'rgba(46, 160, 67, 0.25)'}`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                opacity: (togglingState || submittingComment) ? 0.6 : 1,
+                transition: 'all 0.15s ease-in-out'
+              }}
+              onMouseEnter={e => {
+                if (!togglingState && !submittingComment) {
+                  e.currentTarget.style.background = selectedIssue.state.toLowerCase() === 'open' 
+                    ? 'rgba(248, 81, 73, 0.22)' 
+                    : 'rgba(46, 160, 67, 0.22)';
+                  e.currentTarget.style.borderColor = selectedIssue.state.toLowerCase() === 'open' 
+                    ? 'rgba(248, 81, 73, 0.45)' 
+                    : 'rgba(46, 160, 67, 0.45)';
+                }
+              }}
+              onMouseLeave={e => {
+                if (!togglingState && !submittingComment) {
+                  e.currentTarget.style.background = selectedIssue.state.toLowerCase() === 'open' 
+                    ? 'rgba(248, 81, 73, 0.12)' 
+                    : 'rgba(46, 160, 67, 0.12)';
+                  e.currentTarget.style.borderColor = selectedIssue.state.toLowerCase() === 'open' 
+                    ? 'rgba(248, 81, 73, 0.25)' 
+                    : 'rgba(46, 160, 67, 0.25)';
+                }
+              }}
+            >
+              {togglingState ? (
+                <>
+                  <svg className="spin" width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ marginRight: '2px' }}>
+                    <path fillRule="evenodd" d="M8 2.5a5.5 5.5 0 104.58 2.42l-1.11 1.11A4 4 0 118 4v2.5l3.5-3.5L8 0v2.5z" />
+                  </svg>
+                  Proses...
+                </>
+              ) : selectedIssue.state.toLowerCase() === 'open' ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fillRule="evenodd" d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM0 8a8 8 0 1116 0A8 8 0 010 8zm9 3a1 1 0 11-2 0 1 1 0 012 0zm-.25-6.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" />
+                  </svg>
+                  Close Issue
+                </>
+              ) : (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path fillRule="evenodd" d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8zm9 3a1 1 0 11-2 0 1 1 0 012 0zm-.25-6.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" />
+                  </svg>
+                  Reopen Issue
+                </>
+              )}
             </button>
           </div>
 
@@ -840,6 +1047,73 @@ export default function App() {
                 ))}
               </select>
             </div>
+
+            {/* Saring Berdasarkan Pembuat */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '10px', color: 'var(--vscode-descriptionForeground)' }}>Pembuat Issue</label>
+              <div style={{ 
+                display: 'flex', 
+                background: 'rgba(255, 255, 255, 0.02)', 
+                padding: '2px', 
+                borderRadius: '4px', 
+                border: '1px solid var(--input-border)' 
+              }}>
+                <button 
+                  type="button"
+                  onClick={() => setCreatorFilter('all')}
+                  style={{
+                    flex: 1,
+                    background: creatorFilter === 'all' ? 'var(--vscode-button-background, #007acc)' : 'transparent',
+                    color: creatorFilter === 'all' ? 'var(--vscode-button-foreground, #fff)' : 'var(--vscode-descriptionForeground)',
+                    border: 'none',
+                    borderRadius: '3px',
+                    padding: '4px 0',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s'
+                  }}
+                >
+                  Semua
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setCreatorFilter('me')}
+                  style={{
+                    flex: 1,
+                    background: creatorFilter === 'me' ? 'var(--vscode-button-background, #007acc)' : 'transparent',
+                    color: creatorFilter === 'me' ? 'var(--vscode-button-foreground, #fff)' : 'var(--vscode-descriptionForeground)',
+                    border: 'none',
+                    borderRadius: '3px',
+                    padding: '4px 0',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s'
+                  }}
+                >
+                  Milik Saya
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setCreatorFilter('others')}
+                  style={{
+                    flex: 1,
+                    background: creatorFilter === 'others' ? 'var(--vscode-button-background, #007acc)' : 'transparent',
+                    color: creatorFilter === 'others' ? 'var(--vscode-button-foreground, #fff)' : 'var(--vscode-descriptionForeground)',
+                    border: 'none',
+                    borderRadius: '3px',
+                    padding: '4px 0',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s'
+                  }}
+                >
+                  Orang Lain
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* LOADING DAFTAR */}
@@ -937,26 +1211,33 @@ export default function App() {
                     <div style={{ fontSize: '12px', fontWeight: 'bold', lineHeight: '1.3' }}>
                       {issue.title}
                     </div>
-                    {issue.labels.length > 0 && (
-                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
-                        {issue.labels.map(label => (
-                          <span 
-                            key={label.name} 
-                            style={{
-                              fontSize: '9px',
-                              padding: '0 4px',
-                              borderRadius: '2px',
-                              fontWeight: 500,
-                              backgroundColor: `#${label.color}20`,
-                              color: `#${label.color}`,
-                              border: `1px solid #${label.color}35`
-                            }}
-                          >
-                            {label.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px', gap: '4px', flexWrap: 'wrap' }}>
+                      {issue.labels.length > 0 ? (
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {issue.labels.map(label => (
+                            <span 
+                              key={label.name} 
+                              style={{
+                                fontSize: '9px',
+                                padding: '0 4px',
+                                borderRadius: '2px',
+                                fontWeight: 500,
+                                backgroundColor: `#${label.color}20`,
+                                color: `#${label.color}`,
+                                border: `1px solid #${label.color}35`
+                              }}
+                            >
+                              {label.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : <div />}
+                      {issue.author && (
+                        <span style={{ fontSize: '9.5px', color: 'var(--vscode-descriptionForeground)', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                          👤 @{issue.author}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))
               )}

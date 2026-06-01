@@ -8,6 +8,7 @@ export interface GitHubIssue {
 	body: string;
 	state: string;
 	labels: { name: string; color: string }[];
+	author?: string;
 }
 
 export interface IssueFilters {
