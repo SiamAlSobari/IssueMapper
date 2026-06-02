@@ -90,3 +90,58 @@ a:hover {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--vscode-scrollbarSlider-hoverBackground);
 }
+
+@keyframes skeleton-pulse {
+  0% {
+    opacity: 0.6;
+    background-color: var(--vscode-welcomePage-tileBackground, rgba(128, 128, 128, 0.08));
+  }
+  50% {
+    opacity: 1;
+    background-color: var(--vscode-welcomePage-tileBackground, rgba(128, 128, 128, 0.22));
+  }
+  100% {
+    opacity: 0.6;
+    background-color: var(--vscode-welcomePage-tileBackground, rgba(128, 128, 128, 0.08));
+  }
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+  background-color: var(--vscode-welcomePage-tileBackground, rgba(128, 128, 128, 0.08));
+  border-radius: 4px;
+}
+
+.skeleton-title {
+  height: 12px;
+  width: 40%;
+  margin-bottom: 8px;
+}
+
+.skeleton-text {
+  height: 10px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.skeleton-text-short {
+  height: 10px;
+  width: 75%;
+  margin-bottom: 6px;
+}
+
+.skeleton-card {
+  border: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.15));
+  padding: 8px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.skeleton-badge {
+  height: 12px;
+  width: 40px;
+  border-radius: 10px;
+}

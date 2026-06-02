@@ -1,8 +1,13 @@
 {
   "name": "issue-mapper",
-  "displayName": "issue_mapper",
-  "description": "",
+  "displayName": "IssueMapper AI",
+  "description": "Asisten triase issue GitHub berbasis AI untuk memetakan deskripsi issue ke berkas kode lokal secara otomatis.",
   "version": "0.0.1",
+  "publisher": "siamalsobari",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SiamAlSobari/IssueMapper"
+  },
   "engines": {
     "vscode": "^1.120.0"
   },
