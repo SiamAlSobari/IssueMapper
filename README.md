@@ -142,17 +142,77 @@ Skrip ini akan mengeksekusi dua proses:
 
 ---
 
-## 🔒 Panduan Konfigurasi Kunci API
+## 🔒 Panduan Konfigurasi Kunci API & Setup Provider
 
-Saat pertama kali dibuka, ekstensi akan mendeteksi repositori lokal Anda dan melakukan otentikasi GitHub secara native. Untuk mengaktifkan analisis AI, Anda dapat mengonfigurasi kunci API secara aman:
+Saat pertama kali dibuka, ekstensi akan mendeteksi repositori lokal Anda dan melakukan otentikasi GitHub secara native. Untuk mengaktifkan analisis AI, Anda dapat mengonfigurasi kunci API secara aman melalui tab setelan ekstensi:
 
 1. Klik tombol roda gigi **Pengaturan** (Settings) di sudut kanan atas panel ekstensi.
-2. Pilih penyedia AI yang ingin Anda gunakan:
-   * **OpenAI**: Masukkan Kunci API OpenAI (`sk-...`). Model default: `gpt-4o-mini`.
-   * **Google Gemini**: Masukkan Kunci API Gemini Anda. Model default: `gemini-3-flash`.
-   * **Groq**: Masukkan Kunci API Groq Cloud Anda. Model default: `deepseek-r1-distill-llama-70b`.
-   * **Ollama**: Tentukan Host URL lokal Anda (misalnya: `http://localhost:11434`) dan nama model lokal yang digunakan (misalnya: `llama3`).
-3. Klik **Save Settings**. Kunci API akan langsung disimpan ke dalam OS Secure Keychain Anda melalui VS Code `SecretStorage`.
+2. Pilih penyedia AI yang ingin Anda gunakan, berikut adalah panduan masing-masing:
+   * **Google Gemini (Direkomendasikan)**:
+     * Dapatkan Kunci API gratis di [Google AI Studio](https://aistudio.google.com/).
+     * Tempelkan kunci API ke input setelan Gemini di ekstensi.
+     * Model default: `gemini-3-flash`. Rantai fallback otomatis akan mencoba model cadangan seperti `gemini-2.5-flash` jika terjadi rate limit.
+   * **OpenAI**:
+     * Dapatkan Kunci API di [OpenAI Platform](https://platform.openai.com/api-keys).
+     * Masukkan Kunci API OpenAI (`sk-...`).
+     * Model default: `gpt-4o`. Fallback otomatis: `gpt-4o-mini`.
+   * **Groq Cloud**:
+     * Dapatkan Kunci API gratis di [Groq Console](https://console.groq.com/keys).
+     * Model default: `deepseek-r1-distill-llama-70b` (Distilled DeepSeek model).
+     * Rantai fallback otomatis: `llama-4-scout-17b-16e-instruct` -> `mixtral-8x7b-32768`.
+   * **Ollama (Local LLM)**:
+     * Pastikan Ollama berjalan di latar belakang (misalnya lewat perintah `ollama run llama3`).
+     * Tentukan Host URL lokal Anda (default: `http://localhost:11434`).
+     * Masukkan nama model lokal yang terinstal (misalnya: `llama3` atau `mistral`).
+3. Klik **Save Settings**. Kunci API akan langsung disimpan ke dalam secure keychain sistem operasi Anda secara terenkripsi melalui VS Code `SecretStorage`.
+
+---
+
+## 📦 Pengemasan (Packaging) & Instalasi Produksi (.vsix)
+
+Jika Anda ingin menguji ekstensi ini dalam mode produksi atau membagikannya tanpa mempublikasikan langsung ke VS Code Marketplace, Anda dapat mengemasnya menjadi file biner `.vsix`:
+
+### 1. Prasyarat Pengemasan
+Pastikan Anda telah menginstal CLI `@vscode/vsce` secara global:
+```bash
+npm install -g @vscode/vsce
+```
+
+### 2. Melakukan Kompilasi & Pengemasan
+Jalankan perintah berikut di root direktori proyek untuk melakukan kompilasi bundel final webview & backend host sekaligus mengemasnya:
+```bash
+# Compile and build bundle
+npm run build:all
+
+# Lakukan packaging menjadi berkas .vsix
+vsce package
+```
+*Catatan: Jika ada peringatan lisensi atau README, Anda dapat menekan `y` untuk melanjutkan.* Perintah ini akan menghasilkan file bernama `issue-mapper-0.0.1.vsix` di root direktori proyek Anda.
+
+### 3. Menginstal Berkas .vsix ke VS Code Lokal
+Untuk menginstal file `.vsix` secara manual ke editor VS Code Anda:
+1. Buka VS Code.
+2. Masuk ke panel **Extensions** (`Ctrl+Shift+X` atau `Cmd+Shift+X`).
+3. Klik ikon tiga titik (**...**) di sudut kanan atas panel Extensions.
+4. Pilih menu **Install from VSIX...**.
+5. Pilih file `issue-mapper-0.0.1.vsix` yang baru saja dihasilkan dan klik **Install**.
+6. Ekstensi **IssueMapper AI** akan terinstal secara lokal dan siap digunakan!
+
+---
+
+## 🚀 Publikasi ke VS Code Marketplace
+
+Untuk mempublikasikan ekstensi secara publik ke VS Code Marketplace:
+1. Buat akun organisasi/penerbit di [Microsoft Partner Center / Visual Studio Marketplace Publisher](https://marketplace.visualstudio.com/manage).
+2. Dapatkan Personal Access Token (PAT) dari Azure DevOps dengan cakupan `Marketplace (Publish)`.
+3. Login melalui terminal menggunakan perintah:
+   ```bash
+   vsce login <nama_publisher_anda>
+   ```
+4. Publikasikan ekstensi dengan perintah:
+   ```bash
+   vsce publish
+   ```
 
 ---
 

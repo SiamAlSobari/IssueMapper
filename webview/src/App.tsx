@@ -106,6 +106,45 @@ function renderMarkdown(text: string) {
   });
 }
 
+function AISkeletonLoader() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', padding: '4px 0' }}>
+      {/* Loading header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingBottom: '4px' }}>
+        <svg className="spin" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ color: 'var(--vscode-textLink-foreground)' }}>
+          <path fillRule="evenodd" d="M8 2.5a5.5 5.5 0 104.58 2.42l-1.11 1.11A4 4 0 118 4v2.5l3.5-3.5L8 0v2.5z" />
+        </svg>
+        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', fontWeight: 500 }}>AI sedang menganalisis berkas terkait...</span>
+      </div>
+
+      {/* Ringkasan Analisis AI Skeleton */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div className="skeleton-pulse skeleton-title" style={{ width: '45%' }}></div>
+        <div style={{ background: 'rgba(128,128,128,0.03)', padding: '8px', borderRadius: '4px', borderLeft: '2px solid var(--vscode-panel-border, rgba(128,128,128,0.2))' }}>
+          <div className="skeleton-pulse skeleton-text"></div>
+          <div className="skeleton-pulse skeleton-text-short"></div>
+        </div>
+      </div>
+
+      {/* Rekomendasi Berkas Kode Skeleton */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+        <div className="skeleton-pulse skeleton-title" style={{ width: '60%' }}></div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="skeleton-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="skeleton-pulse" style={{ height: '10px', width: '65%' }}></div>
+                <div className="skeleton-pulse skeleton-badge"></div>
+              </div>
+              <div className="skeleton-pulse" style={{ height: '8px', width: '85%', marginTop: '2px' }}></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [issues, setIssues] = useState<GitHubIssue[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,6 +158,7 @@ export default function App() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [aiSummary, setAiSummary] = useState('');
   const [aiFiles, setAiFiles] = useState<AIFileRecommendation[]>([]);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   
   // State form komentar
   const [commentText, setCommentText] = useState('');
@@ -134,6 +174,7 @@ export default function App() {
   const [repoDetected, setRepoDetected] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [noIssues, setNoIssues] = useState(false);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [currentUser, setCurrentUser] = useState('Colorful');
 
   // Filter creator
@@ -150,9 +191,22 @@ export default function App() {
 
   // Load awal & listener pesan IPC
   useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      if (vscode) {
+        vscode.postMessage({ command: 'getIssues', isOffline: false });
+      }
+    };
+    const handleOffline = () => {
+      setIsOffline(true);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     if (vscode) {
       vscode.postMessage({ command: 'getInitialState' });
-      vscode.postMessage({ command: 'getIssues' });
+      vscode.postMessage({ command: 'getIssues', isOffline: !navigator.onLine });
     } else {
       // Jalankan simulasi data jika di luar VS Code (browser standalone)
       setTimeout(() => {
@@ -208,6 +262,9 @@ export default function App() {
           setAuthenticated(!!message.authenticated);
           setLoading(false);
           setNoIssues(!message.fromCache && message.issues && message.issues.length === 0);
+          if (message.isOffline !== undefined) {
+            setIsOffline(message.isOffline);
+          }
           break;
         case 'createIssueResult':
           setCreatingIssue(false);
@@ -233,8 +290,9 @@ export default function App() {
         case 'analysisResult':
           // Pastikan hasil AI yang masuk cocok dengan issue yang sedang aktif dibuka
           if (selectedIssue && selectedIssue.number === message.number) {
-            setAiFiles(message.files);
-            setAiSummary(message.summary);
+            setAiFiles(message.files || []);
+            setAiSummary(message.summary || '');
+            setAnalysisError(message.error || null);
             setAnalysisLoading(false);
           }
           break;
@@ -271,7 +329,11 @@ export default function App() {
     };
 
     window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, [selectedIssue]);
 
   // Simpan filter saat berubah
@@ -290,6 +352,7 @@ export default function App() {
     setCommentText('');
     setAiSummary('');
     setAiFiles([]);
+    setAnalysisError(null);
     setAnalysisLoading(true);
     
     // Picu analisis kode berbasis AI di Extension Host
@@ -428,7 +491,7 @@ export default function App() {
     setSelectedIssue(null);
     setNoIssues(false);
     if (vscode) {
-      vscode.postMessage({ command: 'refreshIssues' });
+      vscode.postMessage({ command: 'refreshIssues', isOffline: !navigator.onLine });
     } else {
       setTimeout(() => setLoading(false), 800);
     }
@@ -616,6 +679,31 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {isOffline && (
+        <div style={{
+          fontSize: '11px',
+          color: '#c29000',
+          background: 'rgba(255, 165, 0, 0.07)',
+          border: '1px solid rgba(255, 165, 0, 0.25)',
+          padding: '8px 10px',
+          borderRadius: '4px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '8px',
+          flexShrink: 0,
+          boxShadow: '0 2px 6px rgba(0,0,0,0.05)'
+        }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0, marginTop: '1px' }}>
+            <path fillRule="evenodd" d="M8.22 1.754a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368L8.22 1.754zm-1.76 11.378L1.5 13.13l5.96-11.378h.08l5.96 11.378H6.46z" />
+            <path d="M8 5c.552 0 1 .448 1 1v3c0 .552-.448 1-1 1s-1-.448-1-1V6c0-.552.448-1 1-1zm0 7a1 1 0 100-2 1 1 0 000 2z" />
+          </svg>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontWeight: 'bold' }}>Mode Offline Aktif</span>
+            <span style={{ fontSize: '10px', opacity: 0.9 }}>Menampilkan data cached tanpa melakukan pemanggilan API GitHub.</span>
+          </div>
+        </div>
+      )}
 
       {/* DETEKSI STATUS REPOSITORI */}
       {!loading && !selectedIssue && (
@@ -820,7 +908,7 @@ export default function App() {
             gap: '8px',
             flexShrink: 0
           }}>
-            <h4 style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--vscode-textLink-foreground)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <h4 style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--vscode-textLink-foreground)', display: 'flex', alignItems: 'center', gap: '5px', margin: 0 }}>
               <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M9.5 0a.5.5 0 0 1 .5.5.75.75 0 0 0 1.5 0a.5.5 0 0 1 .5-.5h.75a.5.5 0 0 1 .5.5v.75a.5.5 0 0 1-.5.5a.75.75 0 0 0 0 1.5a.5.5 0 0 1 .5.5v.75a.5.5 0 0 1-.5.5H12a.5.5 0 0 1-.5-.5a.75.75 0 0 0-1.5 0a.5.5 0 0 1-.5.5H8.75a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5A.75.75 0 0 0 8.75 1a.5.5 0 0 1-.5-.5V.5A.5.5 0 0 1 8.75 0H9.5z" />
                 <path fillRule="evenodd" d="M2.22 2.22a.75.75 0 0 1 1.06 0L4.5 3.44l1.22-1.22a.75.75 0 1 1 1.06 1.06L5.56 4.5l1.22 1.22a.75.75 0 1 1-1.06 1.06L4.5 5.56l-1.22 1.22a.75.75 0 0 1-1.06-1.06L3.44 4.5L2.22 3.28a.75.75 0 0 1 0-1.06z" />
@@ -829,13 +917,78 @@ export default function App() {
               AI Code Mapping & Triage
             </h4>
 
-            {analysisLoading ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 0', justifyContent: 'center' }}>
-                <svg className="spin" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ color: 'var(--vscode-textLink-foreground)' }}>
-                  <path fillRule="evenodd" d="M8 2.5a5.5 5.5 0 104.58 2.42l-1.11 1.11A4 4 0 118 4v2.5l3.5-3.5L8 0v2.5z" />
-                </svg>
-                <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)' }}>AI sedang menganalisis berkas terkait...</span>
+            {/* Error Banner jika API Key bermasalah atau rate limit tercapai */}
+            {analysisError && (
+              <div style={{
+                fontSize: '11px',
+                color: 'var(--vscode-errorForeground, #f85149)',
+                background: 'var(--vscode-inputValidation-errorBackground, rgba(248, 81, 73, 0.1))',
+                border: '1px solid var(--vscode-inputValidation-errorBorder, rgba(248, 81, 73, 0.3))',
+                padding: '8px 10px',
+                borderRadius: '4px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                flexShrink: 0
+              }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0, marginTop: '1px' }}>
+                    <path fillRule="evenodd" d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8zm9 3a1 1 0 11-2 0 1 1 0 012 0zm-.25-6.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z" />
+                  </svg>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span style={{ fontWeight: 'bold' }}>
+                      {analysisError.toLowerCase().includes('401') || 
+                       analysisError.toLowerCase().includes('api key') || 
+                       analysisError.toLowerCase().includes('unauthorized') ||
+                       analysisError.toLowerCase().includes('tidak valid')
+                        ? 'Kunci API Tidak Valid'
+                        : analysisError.toLowerCase().includes('429') || 
+                          analysisError.toLowerCase().includes('rate limit') || 
+                          analysisError.toLowerCase().includes('quota') ||
+                          analysisError.toLowerCase().includes('habis')
+                          ? 'Batas Kuota Tercapai (Rate Limit)'
+                          : 'Kegagalan Analisis AI'}
+                    </span>
+                    <span style={{ fontSize: '10px', opacity: 0.95, lineHeight: '1.3' }}>
+                      {analysisError.toLowerCase().includes('401') || 
+                       analysisError.toLowerCase().includes('api key') || 
+                       analysisError.toLowerCase().includes('unauthorized') ||
+                       analysisError.toLowerCase().includes('tidak valid')
+                        ? 'Kunci API yang dikonfigurasi tidak valid atau belum diset. Harap periksa setelan Anda.'
+                        : analysisError.toLowerCase().includes('429') || 
+                          analysisError.toLowerCase().includes('rate limit') || 
+                          analysisError.toLowerCase().includes('quota') ||
+                          analysisError.toLowerCase().includes('habis')
+                          ? 'Batas penggunaan API tercapai atau token habis. Anda dapat menunggu beberapa saat atau memperbarui kunci API.'
+                          : `Detail: ${analysisError}`}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSettings(true)}
+                  style={{
+                    background: 'var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2))',
+                    color: 'var(--vscode-button-secondaryForeground, var(--panel-fg))',
+                    border: '1px solid var(--vscode-button-secondaryBorder, transparent)',
+                    borderRadius: '3px',
+                    padding: '3px 8px',
+                    fontSize: '10px',
+                    cursor: 'pointer',
+                    alignSelf: 'flex-start',
+                    fontWeight: 500,
+                    marginTop: '2px',
+                    transition: 'background 0.2s'
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3))'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2))'}
+                >
+                  ⚙️ Buka Pengaturan API Key
+                </button>
               </div>
+            )}
+
+            {analysisLoading ? (
+              <AISkeletonLoader />
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 

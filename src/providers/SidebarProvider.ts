@@ -33,6 +33,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				case 'getIssues': {
 					// Dapatkan issues dari cache dulu jika ada
 					const cached = storageManager.getCachedIssues();
+					
+					// Jika offline, gunakan cache saja dan jangan panggil API GitHub
+					if (message.isOffline) {
+						webviewView.webview.postMessage({
+							command: 'issuesLoaded',
+							issues: cached,
+							currentUser: 'Colorful',
+							repoDetected: true,
+							authenticated: false,
+							fromCache: true,
+							isOffline: true
+						});
+						return;
+					}
+
 					if (cached && cached.length > 0) {
 						webviewView.webview.postMessage({
 							command: 'issuesLoaded',
@@ -60,6 +75,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					return;
 				}
 				case 'refreshIssues': {
+					// Jika offline, kembalikan cache langsung
+					if (message.isOffline) {
+						const cached = storageManager.getCachedIssues();
+						webviewView.webview.postMessage({
+							command: 'issuesLoaded',
+							issues: cached,
+							currentUser: 'Colorful',
+							repoDetected: true,
+							authenticated: false,
+							fromCache: true,
+							isOffline: true
+						});
+						vscode.window.showWarningMessage("Koneksi offline. Menampilkan data cache lokal.");
+						return;
+					}
+
 					// Memaksa memicu dialog login jika forceRefresh dipicu
 					const result = await fetchGitHubIssues(true);
 					await storageManager.setCachedIssues(result.issues);
@@ -133,7 +164,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							command: 'analysisResult',
 							number: message.number,
 							files: analysis.files,
-							summary: `[Kunci API Belum Dikonfigurasi] Menampilkan hasil simulasi:\n\n${analysis.summary}`
+							summary: `[Kunci API Belum Dikonfigurasi] Menampilkan hasil simulasi:\n\n${analysis.summary}`,
+							error: `Kunci API ${activeProvider.toUpperCase()} belum dikonfigurasi. Silakan buka Pengaturan (Settings) untuk memasukkannya.`
 						});
 						return;
 					}
@@ -163,7 +195,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							command: 'analysisResult',
 							number: message.number,
 							files: analysis.files,
-							summary: `[Koneksi AI Gagal: ${err.message}] Fallback ke data simulasi:\n\n${analysis.summary}`
+							summary: `[Koneksi AI Gagal] Fallback ke data simulasi:\n\n${analysis.summary}`,
+							error: err.message || 'Gagal terhubung ke penyedia AI.'
 						});
 					}
 					return;
