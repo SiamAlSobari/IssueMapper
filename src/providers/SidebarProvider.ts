@@ -7,6 +7,7 @@ import { AIProviderFactory } from '../ai/AIClient';
 export class SidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewId = 'issueMapper.sidebar';
 	private _view?: vscode.WebviewView;
+	private _highlightDecorationType?: vscode.TextEditorDecorationType;
 
 	constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -130,7 +131,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					);
 					try {
 						const document = await vscode.workspace.openTextDocument(uri);
-						await vscode.window.showTextDocument(document);
+						const editor = await vscode.window.showTextDocument(document);
+
+						const lineRange = message.lineRange as { start: number; end: number } | undefined;
+						if (lineRange && lineRange.start > 0 && lineRange.end >= lineRange.start) {
+							const startLine = Math.min(lineRange.start - 1, document.lineCount - 1);
+							const endLine = Math.min(lineRange.end - 1, document.lineCount - 1);
+							const range = new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).text.length);
+
+							editor.selection = new vscode.Selection(range.start, range.start);
+							editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+
+							if (this._highlightDecorationType) {
+								this._highlightDecorationType.dispose();
+							}
+							this._highlightDecorationType = vscode.window.createTextEditorDecorationType({
+								backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+								isWholeLine: true,
+								borderColor: new vscode.ThemeColor('editor.findMatchHighlightBorder'),
+								borderWidth: '1px',
+								borderStyle: 'solid',
+								overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.findMatchHighlightForeground'),
+								overviewRulerLane: vscode.OverviewRulerLane.Full
+							});
+							editor.setDecorations(this._highlightDecorationType, [range]);
+
+							const timeoutMs = 5000;
+							setTimeout(() => {
+								if (this._highlightDecorationType) {
+									this._highlightDecorationType.dispose();
+									this._highlightDecorationType = undefined;
+								}
+							}, timeoutMs);
+						}
 					} catch (err: any) {
 						vscode.window.showErrorMessage(`Gagal membuka berkas: ${err.message}`);
 					}
@@ -491,29 +524,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async _getMockAnalysis(number: number, title: string, workspaceFiles: string[]) {
-		let files: { filePath: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW'; reason: string }[] = [];
+		let files: { filePath: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW'; reason: string; lineRange?: { start: number; end: number }; targetSymbol?: string }[] = [];
 		let summary = "";
 
 		if (number === 101) {
 			files = [
-				{ filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Modul utama penanganan otentikasi dan token kedaluwarsa." },
-				{ filePath: "src/components/Login.tsx", confidence: "HIGH", reason: "Menangani tampilan UI formulir login dan memicu redirect." },
+				{ filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Modul utama penanganan otentikasi dan token kedaluwarsa.", lineRange: { start: 45, end: 72 }, targetSymbol: "handleTokenRefresh" },
+				{ filePath: "src/components/Login.tsx", confidence: "HIGH", reason: "Menangani tampilan UI formulir login dan memicu redirect.", lineRange: { start: 18, end: 35 }, targetSymbol: "LoginComponent" },
 				{ filePath: "package.json", confidence: "LOW", reason: "Mencatat versi dependensi axios / library auth yang digunakan." }
 			];
 			summary = "Analisis mendeteksi bahwa token kedaluwarsa melempar error status 401 unhandled. Perlu ditambahkan interceptor di `src/utils/auth.ts` untuk menangkap status 401 dan melakukan pengalihan paksa kursor pengguna ke halaman login `/login`.";
 		} else if (number === 102) {
 			files = [
-				{ filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Perlu ditambahkan konfigurasi Google OAuth Client Provider." },
-				{ filePath: "src/components/Settings.tsx", confidence: "MEDIUM", reason: "Menambahkan tombol opsi Google login di antarmuka setelan." }
+				{ filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Perlu ditambahkan konfigurasi Google OAuth Client Provider.", lineRange: { start: 10, end: 30 }, targetSymbol: "OAuthConfig" },
+				{ filePath: "src/components/Settings.tsx", confidence: "MEDIUM", reason: "Menambahkan tombol opsi Google login di antarmuka setelan.", lineRange: { start: 55, end: 78 }, targetSymbol: "SettingsPanel" }
 			];
 			summary = "Penambahan fitur Google OAuth memerlukan integrasi client ID Google di modul otentikasi serta tombol visual baru pada panel pengaturan pengguna.";
 		} else if (number === 103) {
 			files = [
-				{ filePath: "README.md", confidence: "HIGH", reason: "Berkas dokumentasi utama proyek yang kosong." }
+				{ filePath: "README.md", confidence: "HIGH", reason: "Berkas dokumentasi utama proyek yang kosong.", lineRange: { start: 1, end: 10 } }
 			];
 			summary = "README.md perlu diisi dengan petunjuk setup proyek seperti `npm install`, pengemasan menggunakan `vsce package`, dan instruksi konfigurasi API Key.";
 		} else {
-			// Berkas default jika membuka issue kustom
 			const defaultFiles = workspaceFiles.length > 0 ? workspaceFiles.slice(0, 2) : ["src/extension.ts"];
 			files = defaultFiles.map(f => ({
 				filePath: f,

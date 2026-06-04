@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 
+export interface LineRange {
+	start: number;
+	end: number;
+}
+
 export interface AIResponse {
-	files: { filePath: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW'; reason: string }[];
+	files: { filePath: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW'; reason: string; lineRange?: LineRange; targetSymbol?: string }[];
 	summary: string;
 }
 
@@ -52,10 +57,22 @@ export function parseAIResponse(text: string): AIResponse {
 				confidence = upper as any;
 			}
 		}
+
+		let lineRange: LineRange | undefined = undefined;
+		if (f.lineRange && typeof f.lineRange === 'object') {
+			const start = typeof f.lineRange.start === 'number' && f.lineRange.start > 0 ? f.lineRange.start : undefined;
+			const end = typeof f.lineRange.end === 'number' && f.lineRange.end > 0 ? f.lineRange.end : undefined;
+			if (start !== undefined && end !== undefined && end >= start) {
+				lineRange = { start, end };
+			}
+		}
+
 		return {
 			filePath: typeof f.filePath === 'string' ? f.filePath : '',
 			confidence,
-			reason: typeof f.reason === 'string' ? f.reason : ''
+			reason: typeof f.reason === 'string' ? f.reason : '',
+			lineRange,
+			targetSymbol: typeof f.targetSymbol === 'string' ? f.targetSymbol : undefined
 		};
 	}).filter(f => f.filePath !== '');
 
@@ -134,7 +151,7 @@ export class OpenAIProvider implements IAIProvider {
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
 		return executeWithFallback('OpenAI', this.models, async (model) => {
-			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug.
+			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
@@ -149,11 +166,15 @@ Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan s
     {
       "filePath": "relative/path/to/file.ts",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
-      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut"
+      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut",
+      "lineRange": { "start": <nomor_baris_awal>, "end": <nomor_baris_akhir> },
+      "targetSymbol": "<nama fungsi, variabel, atau kelas yang relevan>"
     }
   ],
   "summary": "Analisis ringkas masalah dalam 1-2 kalimat"
-}`;
+}
+
+Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin dengan lokasi baris spesifik, cukup hilangkan field "lineRange" atau set null. Nomor baris harus berupa integer positif dimulai dari 1.`;
 
 			const response = await fetch('https://api.openai.com/v1/chat/completions', {
 				method: 'POST',
@@ -228,7 +249,7 @@ export class GeminiProvider implements IAIProvider {
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
 		return executeWithFallback('Gemini', this.models, async (model) => {
-			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug.
+			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
@@ -243,11 +264,15 @@ Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan s
     {
       "filePath": "relative/path/to/file.ts",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
-      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut"
+      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut",
+      "lineRange": { "start": <nomor_baris_awal>, "end": <nomor_baris_akhir> },
+      "targetSymbol": "<nama fungsi, variabel, atau kelas yang relevan>"
     }
   ],
   "summary": "Analisis ringkas masalah dalam 1-2 kalimat"
-}`;
+}
+
+Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin dengan lokasi baris spesifik, cukup hilangkan field "lineRange" atau set null. Nomor baris harus berupa integer positif dimulai dari 1.`;
 
 			const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
 			const response = await fetch(url, {
@@ -320,7 +345,7 @@ export class GroqProvider implements IAIProvider {
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
 		return executeWithFallback('Groq', this.models, async (model) => {
-			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug.
+			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
@@ -335,11 +360,15 @@ Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan s
     {
       "filePath": "relative/path/to/file.ts",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
-      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut"
+      "reason": "Alasan singkat mengapa berkas ini relevan dengan issue tersebut",
+      "lineRange": { "start": <nomor_baris_awal>, "end": <nomor_baris_akhir> },
+      "targetSymbol": "<nama fungsi, variabel, atau kelas yang relevan>"
     }
   ],
   "summary": "Analisis ringkas masalah dalam 1-2 kalimat"
-}`;
+}
+
+Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin dengan lokasi baris spesifik, cukup hilangkan field "lineRange" atau set null. Nomor baris harus berupa integer positif dimulai dari 1.`;
 
 			const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 				method: 'POST',
@@ -405,7 +434,7 @@ export class OllamaProvider implements IAIProvider {
 	constructor(private hostUrl: string = 'http://localhost:11434', private model: string = 'llama3') {}
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
-		const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug.
+		const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
@@ -420,11 +449,15 @@ Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan s
     {
       "filePath": "relative/path/to/file.ts",
       "confidence": "HIGH" | "MEDIUM" | "LOW",
-      "reason": "Alasan singkat berkas ini relevan"
+      "reason": "Alasan singkat berkas ini relevan",
+      "lineRange": { "start": <nomor_baris_awal>, "end": <nomor_baris_akhir> },
+      "targetSymbol": "<nama fungsi, variabel, atau kelas yang relevan>"
     }
   ],
   "summary": "Analisis ringkas masalah dalam 1-2 kalimat"
-}`;
+}
+
+Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin dengan lokasi baris spesifik, cukup hilangkan field "lineRange" atau set null. Nomor baris harus berupa integer positif dimulai dari 1.`;
 
 		const response = await fetch(`${this.hostUrl}/api/chat`, {
 			method: 'POST',
