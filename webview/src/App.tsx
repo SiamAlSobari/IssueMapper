@@ -16,6 +16,8 @@ interface AIFileRecommendation {
   filePath: string;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   reason: string;
+  lineRange?: { start: number; end: number };
+  targetSymbol?: string;
 }
 
 // Inisialisasi API VS Code di Webview
@@ -368,7 +370,7 @@ export default function App() {
       setTimeout(() => {
         setAiSummary("Simulasi: Masalah terjadi pada pemanggilan token eksternal. Periksa berkas otentikasi.");
         setAiFiles([
-          { filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Fungsi otentikasi token berada di berkas ini." }
+          { filePath: "src/utils/auth.ts", confidence: "HIGH", reason: "Fungsi otentikasi token berada di berkas ini.", lineRange: { start: 45, end: 60 }, targetSymbol: "handleTokenRefresh" }
         ]);
         setAnalysisLoading(false);
       }, 1000);
@@ -498,11 +500,11 @@ export default function App() {
   };
 
   // Buka berkas kode lokal
-  const handleOpenFile = (filePath: string) => {
+  const handleOpenFile = (file: AIFileRecommendation) => {
     if (vscode) {
-      vscode.postMessage({ command: 'openFile', filePath });
+      vscode.postMessage({ command: 'openFile', filePath: file.filePath, lineRange: file.lineRange || null });
     } else {
-      alert(`Membuka berkas: ${filePath}`);
+      alert(`Membuka berkas: ${file.filePath}${file.lineRange ? ` (baris ${file.lineRange.start}-${file.lineRange.end})` : ''}`);
     }
   };
 
@@ -1010,7 +1012,7 @@ export default function App() {
                       {aiFiles.map((file, i) => (
                         <div 
                           key={i} 
-                          onClick={() => handleOpenFile(file.filePath)}
+                          onClick={() => handleOpenFile(file)}
                           style={{
                             padding: '6px 8px',
                             background: 'var(--vscode-input-background, rgba(255,255,255,0.02))',
@@ -1029,6 +1031,42 @@ export default function App() {
                             <span style={{ fontWeight: 'bold', fontFamily: 'monospace' }}>📄 {file.filePath}</span>
                             {renderConfidenceBadge(file.confidence)}
                           </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            {file.lineRange && (
+                              <span style={{
+                                fontSize: '9px',
+                                fontWeight: 'bold',
+                                padding: '1px 5px',
+                                borderRadius: '3px',
+                                color: '#58a6ff',
+                                backgroundColor: 'rgba(88, 166, 255, 0.12)',
+                                border: '1px solid rgba(88, 166, 255, 0.3)',
+                                fontFamily: 'monospace',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px'
+                              }}>
+                                <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
+                                  <path fillRule="evenodd" d="M4.5 2A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V6.621a1.5 1.5 0 0 0-.44-1.06L9.439 2.44A1.5 1.5 0 0 0 8.378 2H4.5zM6.5 8.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1H7a.5.5 0 0 1-.5-.5zM7 11a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 0 1h-1A.5.5 0 0 1 7 11z"/>
+                                </svg>
+                                L{file.lineRange.start}-{file.lineRange.end}
+                              </span>
+                            )}
+                            {file.targetSymbol && (
+                              <span style={{
+                                fontSize: '9px',
+                                fontWeight: 500,
+                                padding: '1px 5px',
+                                borderRadius: '3px',
+                                color: '#d2a8ff',
+                                backgroundColor: 'rgba(210, 168, 255, 0.1)',
+                                border: '1px solid rgba(210, 168, 255, 0.25)',
+                                fontFamily: 'monospace'
+                              }}>
+                                {file.targetSymbol}
+                              </span>
+                            )}
+                          </div>
                           {file.reason && (
                             <span style={{ fontSize: '9.5px', color: 'var(--vscode-descriptionForeground)', lineHeight: '1.3' }}>
                               {file.reason}
@@ -1040,7 +1078,7 @@ export default function App() {
                   </div>
                 )}
                 <span style={{ fontSize: '9px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic', textAlign: 'center', marginTop: '2px' }}>
-                  *Klik berkas di atas untuk membuka kodenya langsung di editor.
+                  *Klik berkas di atas untuk membuka kodenya langsung di editor. Baris target akan disorot otomatis.
                 </span>
               </div>
             )}
