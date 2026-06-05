@@ -1,10 +1,45 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { exec } from 'child_process';
 
 export interface RepositoryInfo {
 	owner: string;
 	repo: string;
+}
+
+export interface GitCommitInfo {
+	hash: string;
+	message: string;
+	files: string[];
+}
+
+export interface GitContext {
+	activeBranch: string;
+	unstagedFiles: string[];
+	recentCommits: GitCommitInfo[];
+}
+
+/**
+ * Menjalankan perintah git di dalam root folder workspace aktif
+ * dan mengembalikan stdout dalam bentuk string.
+ */
+function execGitCommand(args: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) {
+			reject(new Error('Tidak ada workspace aktif.'));
+			return;
+		}
+		const cwd = workspaceFolders[0].uri.fsPath;
+		exec(`git ${args}`, { cwd, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+			if (err) {
+				reject(err);
+				return;
+			}
+			resolve(stdout.trim());
+		});
+	});
 }
 
 /**
@@ -96,6 +131,50 @@ export async function getGitHubRepositoryInfo(): Promise<RepositoryInfo | undefi
 	}
 
 	return undefined;
+}
+
+/**
+ * Mendapatkan konteks Git lokal: branch aktif, status unstaged,
+ * dan daftar berkas yang dimodifikasi pada 5 commit terakhir.
+ */
+export async function getGitContext(): Promise<GitContext> {
+	const empty: GitContext = { activeBranch: '', unstagedFiles: [], recentCommits: [] };
+
+	try {
+		const [branch, status, logOutput] = await Promise.all([
+			execGitCommand('rev-parse --abbrev-ref HEAD'),
+			execGitCommand('status --porcelain'),
+			execGitCommand('log --name-only --oneline -n 5')
+		]);
+
+		const unstagedFiles: string[] = status
+			.split('\n')
+			.filter(line => line.trim().length > 0)
+			.map(line => line.trim().replace(/^(.)\s+/, ''));
+
+		const recentCommits: GitCommitInfo[] = [];
+		const logLines = logOutput.split('\n');
+		let currentCommit: GitCommitInfo | null = null;
+
+		for (const line of logLines) {
+			const commitMatch = line.match(/^([a-f0-9]{7,})\s(.+)/);
+			if (commitMatch) {
+				if (currentCommit) {
+					recentCommits.push(currentCommit);
+				}
+				currentCommit = { hash: commitMatch[1], message: commitMatch[2], files: [] };
+			} else if (currentCommit && line.trim().length > 0) {
+				currentCommit.files.push(line.trim());
+			}
+		}
+		if (currentCommit) {
+			recentCommits.push(currentCommit);
+		}
+
+		return { activeBranch: branch, unstagedFiles, recentCommits };
+	} catch (e) {
+		return empty;
+	}
 }
 
 /**
