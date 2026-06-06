@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { GitContext } from '../utils/workspaceScanner';
+import { loadProjectConfig, formatProjectConfig, ProjectConfig } from './projectConfig';
 
 export interface LineRange {
 	start: number;
@@ -83,8 +85,59 @@ export function parseAIResponse(text: string): AIResponse {
 }
 
 export interface IAIProvider {
-	analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse>;
+	analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse>;
 	generateReply(issueDesc: string, currentCodeContext: string): Promise<string>;
+}
+
+/**
+ * Memuat konfigurasi proyek (.issuemaprc / .issue-mapper.json) dan menyusunnya
+ * menjadi blok teks yang siap disisipkan ke dalam System Prompt AI.
+ */
+async function buildProjectRulesBlock(): Promise<string> {
+	try {
+		const config: ProjectConfig | null = await loadProjectConfig();
+		if (!config) {
+			return '';
+		}
+
+		const formatted = formatProjectConfig(config);
+		if (!formatted) {
+			return '';
+		}
+
+		return `\n\n---\nAturan & Panduan Proyek Lokal:\n${formatted}`;
+	} catch (e) {
+		return '';
+	}
+}
+
+/**
+ * Memformat objek GitContext menjadi string ringkas untuk disisipkan ke prompt LLM.
+ */
+function formatGitContext(gitContext?: GitContext): string {
+	if (!gitContext || !gitContext.activeBranch) {
+		return '';
+	}
+
+	let lines: string[] = [];
+	lines.push(`- Branch Aktif: ${gitContext.activeBranch}`);
+
+	if (gitContext.unstagedFiles.length > 0) {
+		lines.push(`- Berkas Unstaged/Belum Dikomit:`);
+		for (const f of gitContext.unstagedFiles.slice(0, 30)) {
+			lines.push(`  - ${f}`);
+		}
+	}
+
+	if (gitContext.recentCommits.length > 0) {
+		lines.push(`- Riwayat 5 Komit Terakhir:`);
+		for (const c of gitContext.recentCommits) {
+			const fileList = c.files.length > 0 ? ` → [${c.files.join(', ')}]` : '';
+			lines.push(`  - ${c.hash} "${c.message}"${fileList}`);
+		}
+	}
+
+	return lines.join('\n');
 }
 
 /**
@@ -149,8 +202,17 @@ export class OpenAIProvider implements IAIProvider {
 		this.models = preferredModel === 'gpt-4o' ? ['gpt-4o', 'gpt-4o-mini'] : [preferredModel, 'gpt-4o-mini'];
 	}
 
-	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
+	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
 		return executeWithFallback('OpenAI', this.models, async (model) => {
+			const gitSection = formatGitContext(gitContext);
+			const gitBlock = gitSection
+				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
+				: '';
+
+			const projectRulesBlock = await buildProjectRulesBlock();
+
+			const systemPrompt = `You are an expert developer assistant.${projectRulesBlock}`;
+
 			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
@@ -158,7 +220,7 @@ Title: ${issueTitle}
 Description: ${issueDesc}
 
 Daftar Berkas Workspace:
-${JSON.stringify(filePaths, null, 2)}
+${JSON.stringify(filePaths, null, 2)}${gitBlock}
 
 Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan skema berikut:
 {
@@ -185,7 +247,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				body: JSON.stringify({
 					model: model,
 					messages: [
-						{ role: 'system', content: 'You are an expert developer assistant.' },
+						{ role: 'system', content: systemPrompt },
 						{ role: 'user', content: prompt }
 					],
 					response_format: { type: "json_object" },
@@ -206,6 +268,9 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
 		return executeWithFallback('OpenAI', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrompt = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
+
 			const response = await fetch('https://api.openai.com/v1/chat/completions', {
 				method: 'POST',
 				headers: {
@@ -215,7 +280,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				body: JSON.stringify({
 					model: model,
 					messages: [
-						{ role: 'system', content: 'You are an expert developer assistant writing a friendly and technical GitHub reply.' },
+						{ role: 'system', content: systemPrompt },
 						{ role: 'user', content: `Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` }
 					],
 					temperature: 0.7
@@ -247,8 +312,17 @@ export class GeminiProvider implements IAIProvider {
 			: [preferredModel, ...geminiChain];
 	}
 
-	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
+	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
 		return executeWithFallback('Gemini', this.models, async (model) => {
+			const gitSection = formatGitContext(gitContext);
+			const gitBlock = gitSection
+				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
+				: '';
+
+			const projectRulesBlock = await buildProjectRulesBlock();
+
+			const systemInstruction = `You are an expert developer assistant.${projectRulesBlock}`;
+
 			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
@@ -256,7 +330,7 @@ Title: ${issueTitle}
 Description: ${issueDesc}
 
 Daftar Berkas Workspace:
-${JSON.stringify(filePaths, null, 2)}
+${JSON.stringify(filePaths, null, 2)}${gitBlock}
 
 Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan skema berikut:
 {
@@ -282,6 +356,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				},
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
+					systemInstruction: { parts: [{ text: systemInstruction }] },
 					generationConfig: {
 						responseMimeType: "application/json",
 						temperature: 0.2
@@ -302,6 +377,9 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
 		return executeWithFallback('Gemini', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemInstruction = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
+
 			const prompt = `Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}`;
 			
 			const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
@@ -312,6 +390,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				},
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
+					systemInstruction: { parts: [{ text: systemInstruction }] },
 					generationConfig: {
 						temperature: 0.7
 					}
@@ -343,8 +422,17 @@ export class GroqProvider implements IAIProvider {
 			: [preferredModel, ...groqChain];
 	}
 
-	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
+	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
 		return executeWithFallback('Groq', this.models, async (model) => {
+			const gitSection = formatGitContext(gitContext);
+			const gitBlock = gitSection
+				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
+				: '';
+
+			const projectRulesBlock = await buildProjectRulesBlock();
+
+			const systemPrompt = `You are an expert developer assistant.${projectRulesBlock}`;
+
 			const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
@@ -352,7 +440,7 @@ Title: ${issueTitle}
 Description: ${issueDesc}
 
 Daftar Berkas Workspace:
-${JSON.stringify(filePaths, null, 2)}
+${JSON.stringify(filePaths, null, 2)}${gitBlock}
 
 Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan skema berikut:
 {
@@ -379,7 +467,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				body: JSON.stringify({
 					model: model,
 					messages: [
-						{ role: 'system', content: 'You are an expert developer assistant.' },
+						{ role: 'system', content: systemPrompt },
 						{ role: 'user', content: prompt }
 					],
 					response_format: { type: "json_object" },
@@ -400,6 +488,9 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
 		return executeWithFallback('Groq', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrompt = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
+
 			const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 				method: 'POST',
 				headers: {
@@ -409,7 +500,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				body: JSON.stringify({
 					model: model,
 					messages: [
-						{ role: 'system', content: 'You are an expert developer assistant writing a friendly and technical GitHub reply.' },
+						{ role: 'system', content: systemPrompt },
 						{ role: 'user', content: `Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` }
 					],
 					temperature: 0.7
@@ -433,15 +524,23 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 export class OllamaProvider implements IAIProvider {
 	constructor(private hostUrl: string = 'http://localhost:11434', private model: string = 'llama3') {}
 
-	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[]): Promise<AIResponse> {
-		const prompt = `Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
+	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
+		const gitSection = formatGitContext(gitContext);
+		const gitBlock = gitSection
+			? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
+			: '';
+
+		const projectRulesBlock = await buildProjectRulesBlock();
+		const systemPrefix = `You are an expert developer assistant.${projectRulesBlock}\n\n`;
+
+		const prompt = `${systemPrefix}Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
 Description: ${issueDesc}
 
 Daftar Berkas Workspace:
-${JSON.stringify(filePaths, null, 2)}
+${JSON.stringify(filePaths, null, 2)}${gitBlock}
 
 Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan skema berikut:
 {
@@ -481,6 +580,9 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
+		const projectRulesBlock = await buildProjectRulesBlock();
+		const systemPrefix = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}\n\n`;
+
 		const response = await fetch(`${this.hostUrl}/api/chat`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -488,7 +590,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				model: this.model,
 				messages: [{ 
 					role: 'user', 
-					content: `Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` 
+					content: `${systemPrefix}Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` 
 				}],
 				stream: false
 			})

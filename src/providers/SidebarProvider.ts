@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { fetchGitHubIssues, postGitHubComment, updateGitHubIssueState, createGitHubIssue } from '../utils/github';
 import { storageManager } from '../extension';
-import { getWorkspaceFiles } from '../utils/workspaceScanner';
+import { getWorkspaceFiles, getGitContext } from '../utils/workspaceScanner';
 import { AIProviderFactory } from '../ai/AIClient';
+import { loadProjectConfig, getProjectIgnorePatterns } from '../ai/projectConfig';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewId = 'issueMapper.sidebar';
@@ -170,8 +171,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					return;
 				}
 				case 'analyzeIssue': {
-					const files = await getWorkspaceFiles();
-					
+					// Muat konfigurasi proyek (.issuemaprc / .issue-mapper.json)
+					await loadProjectConfig();
+					const ignorePatterns = getProjectIgnorePatterns();
+
+					const [files, gitContext] = await Promise.all([
+						getWorkspaceFiles(ignorePatterns.length > 0 ? ignorePatterns : undefined),
+						getGitContext()
+					]);
+
 					const activeProvider = storageManager.getActiveProvider();
 					const selectedModel = storageManager.getSelectedModel();
 					let apiKey = '';
@@ -211,8 +219,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							activeProvider === 'ollama' ? storageManager.getOllamaHostUrl() : undefined
 						);
 
-						const analysis = await client.analyzeIssue(message.title, issueBody, files);
-						
+						const analysis = await client.analyzeIssue(message.title, issueBody, files, gitContext);
+
 						webviewView.webview.postMessage({
 							command: 'analysisResult',
 							number: message.number,
@@ -221,7 +229,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 						});
 					} catch (err: any) {
 						vscode.window.showErrorMessage(`Gagal melakukan analisis AI: ${err.message}`);
-						
+
 						// Jika gagal, fallback ke mock analisis
 						const analysis = await this._getMockAnalysis(message.number, message.title, files);
 						webviewView.webview.postMessage({
