@@ -46,8 +46,9 @@ function execGitCommand(args: string): Promise<string> {
  * Mendapatkan daftar path relatif berkas di workspace secara asinkron.
  * Menyaring folder dependensi pihak ketiga, folder kompilasi, serta berkas biner
  * dari berbagai bahasa pemrograman (JS, Python, Go, Rust, Java, C++, dll.).
+ * @param extraIgnorePatterns Pola eksklusi tambahan dari konfigurasi proyek (misal .issuemaprc).
  */
-export async function getWorkspaceFiles(): Promise<string[]> {
+export async function getWorkspaceFiles(extraIgnorePatterns?: string[]): Promise<string[]> {
 	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
 		return [];
 	}
@@ -60,7 +61,7 @@ export async function getWorkspaceFiles(): Promise<string[]> {
 	// - Go/Ruby/PHP: vendor, .bundle
 	// - Version Control: .git, .svn, .hg
 	// - Binary & Assets: Gambar, video, audio, arsip kompresi, berkas executable
-	const excludePattern = '{' + [
+	const defaultPatterns = [
 		'**/node_modules/**', '**/.git/**', '**/.svn/**', '**/.hg/**',
 		'**/dist/**', '**/build/**', '**/out/**', '**/bin/**',
 		'**/.next/**', '**/.nuxt/**', '**/.cache/**',
@@ -71,7 +72,13 @@ export async function getWorkspaceFiles(): Promise<string[]> {
 		'**/*.webp', '**/*.mp4', '**/*.mp3', '**/*.wav', '**/*.pdf',
 		'**/*.zip', '**/*.tar.gz', '**/*.rar', '**/*.7z',
 		'**/*.exe', '**/*.dll', '**/*.so', '**/*.dylib', '**/*.dmg'
-	].join(',') + '}';
+	];
+
+	const allPatterns = extraIgnorePatterns && extraIgnorePatterns.length > 0
+		? [...defaultPatterns, ...extraIgnorePatterns]
+		: defaultPatterns;
+
+	const excludePattern = '{' + allPatterns.join(',') + '}';
 	
 	try {
 		const files = await vscode.workspace.findFiles('**/*', excludePattern, 1000);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import SettingsPanel from './components/SettingsPanel';
 import CreateIssuePanel from './components/CreateIssuePanel';
+import DiffView, { DiffBlock } from './components/DiffView';
 
 // Tipe data issue sesuai backend
 interface GitHubIssue {
@@ -161,6 +162,9 @@ export default function App() {
   const [aiSummary, setAiSummary] = useState('');
   const [aiFiles, setAiFiles] = useState<AIFileRecommendation[]>([]);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [generatingFix, setGeneratingFix] = useState(false);
+  const [patchData, setPatchData] = useState<{ fixes: DiffBlock[]; explanation: string } | null>(null);
+  const [applyingPatch, setApplyingPatch] = useState(false);
   
   // State form komentar
   const [commentText, setCommentText] = useState('');
@@ -327,6 +331,26 @@ export default function App() {
             setTimeout(() => setSubmitSuccessMsg(''), 3000);
           }
           break;
+        case 'generateFixResult':
+          setGeneratingFix(false);
+          if (message.success && message.fixes && message.fixes.length > 0) {
+            setPatchData({ fixes: message.fixes, explanation: message.explanation || '' });
+            setSubmitSuccessMsg('Perbaikan kode berhasil dihasilkan! Tinjau diff di bawah.');
+            setTimeout(() => setSubmitSuccessMsg(''), 3000);
+          } else {
+            setAnalysisError(message.error || 'Gagal menghasilkan perbaikan kode.');
+          }
+          break;
+        case 'applyCodePatchResult':
+          setApplyingPatch(false);
+          if (message.success) {
+            setPatchData(null);
+            setSubmitSuccessMsg(`Patch berhasil diterapkan ke ${message.filePath}! Backup: ${message.backupPath}`);
+            setTimeout(() => setSubmitSuccessMsg(''), 5000);
+          } else if (!message.cancelled) {
+            setAnalysisError(message.error || 'Gagal menerapkan patch.');
+          }
+          break;
       }
     };
 
@@ -356,6 +380,7 @@ export default function App() {
     setAiFiles([]);
     setAnalysisError(null);
     setAnalysisLoading(true);
+    setPatchData(null);
     
     // Picu analisis kode berbasis AI di Extension Host
     if (vscode) {
@@ -451,6 +476,61 @@ export default function App() {
         setSubmitSuccessMsg(nextState === 'closed' ? 'Issue berhasil ditutup!' : 'Issue berhasil dibuka kembali!');
         setTimeout(() => setSubmitSuccessMsg(''), 3000);
       }, 800);
+    }
+  };
+
+  // Menerapkan patch ke file
+  const handleApplyPatch = (fix: DiffBlock) => {
+    if (!vscode) return;
+    setApplyingPatch(true);
+    vscode.postMessage({
+      command: 'applyCodePatch',
+      filePath: fix.filePath,
+      oldCode: fix.oldCode,
+      newCode: fix.newCode,
+    });
+  };
+
+  const handleDismissPatch = (index: number) => {
+    setPatchData(prev => {
+      if (!prev) return null;
+      const remaining = prev.fixes.filter((_, i) => i !== index);
+      if (remaining.length === 0) return null;
+      return { ...prev, fixes: remaining };
+    });
+  };
+
+  // Menjalankan AI Code Patch Generator
+  const handleGenerateFix = () => {
+    if (!selectedIssue) return;
+    setGeneratingFix(true);
+    setPatchData(null);
+    setAnalysisError(null);
+    if (vscode) {
+      vscode.postMessage({
+        command: 'generateFix',
+        number: selectedIssue.number,
+        title: selectedIssue.title,
+        body: selectedIssue.body
+      });
+    } else {
+      // Simulasi respon sukses di standalone browser
+      setTimeout(() => {
+        setGeneratingFix(false);
+        setPatchData({
+          fixes: [{
+            filePath: "src/utils/auth.ts",
+            oldCode: "function handleTokenRefresh() {\n  const token = getToken();\n  if (!token) {\n    throw new Error('401 Unauthorized');\n  }\n}",
+            newCode: "function handleTokenRefresh() {\n  const token = getToken();\n  if (!token) {\n    window.location.href = '/login';\n    return;\n  }\n}",
+            summary: "Mengubah error 401 unhandled menjadi redirect ke halaman login.",
+            startLine: 45,
+            endLine: 50,
+          }],
+          explanation: "Perbaikan ini mengganti throw error dengan redirect ke halaman login."
+        });
+        setSubmitSuccessMsg('Saran perbaikan kode berhasil dibuat!');
+        setTimeout(() => setSubmitSuccessMsg(''), 3000);
+      }, 1500);
     }
   };
 
@@ -1080,6 +1160,85 @@ export default function App() {
                 <span style={{ fontSize: '9px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic', textAlign: 'center', marginTop: '2px' }}>
                   *Klik berkas di atas untuk membuka kodenya langsung di editor. Baris target akan disorot otomatis.
                 </span>
+
+                {/* Tombol Generate Fix (AI Code Patch) */}
+                <button
+                  onClick={handleGenerateFix}
+                  disabled={generatingFix || analysisLoading}
+                  style={{
+                    background: 'var(--vscode-button-background, #007acc)',
+                    color: 'var(--vscode-button-foreground, #ffffff)',
+                    border: 'none',
+                    padding: '8px 12px',
+                    borderRadius: '2px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    marginTop: '8px',
+                    width: '100%',
+                    transition: 'background-color 0.15s ease-in-out',
+                    opacity: (generatingFix || analysisLoading) ? 0.6 : 1
+                  }}
+                  onMouseEnter={e => {
+                    if (!generatingFix && !analysisLoading) {
+                      e.currentTarget.style.background = 'var(--vscode-button-hoverBackground, #0062a3)';
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    if (!generatingFix && !analysisLoading) {
+                      e.currentTarget.style.background = 'var(--vscode-button-background, #007acc)';
+                    }
+                  }}
+                >
+                  {generatingFix ? (
+                    <>
+                      <svg className="spin" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path fillRule="evenodd" d="M8 2.5a5.5 5.5 0 104.58 2.42l-1.11 1.11A4 4 0 118 4v2.5l3.5-3.5L8 0v2.5z" />
+                      </svg>
+                      Menghasilkan Perbaikan...
+                    </>
+                  ) : (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path fillRule="evenodd" d="M9.5 0a.5.5 0 0 1 .5.5.75.75 0 0 0 1.5 0a.5.5 0 0 1 .5-.5h.75a.5.5 0 0 1 .5.5v.75a.5.5 0 0 1-.5.5a.75.75 0 0 0 0 1.5a.5.5 0 0 1 .5.5v.75a.5.5 0 0 1-.5.5H12a.5.5 0 0 1-.5-.5a.75.75 0 0 0-1.5 0a.5.5 0 0 1-.5.5H8.75a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5A.75.75 0 0 0 8.75 1a.5.5 0 0 1-.5-.5V.5A.5.5 0 0 1 8.75 0H9.5z" />
+                        <path fillRule="evenodd" d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM0 8a8 8 0 1116 0A8 8 0 010 8zm6.5-1.5H8v1.5H6.5v1.5a.5.5 0 01-1 0v-1.5H4v-1.5h1.5v-1.5a.5.5 0 011 0v1.5zm6.5.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+                      </svg>
+                      Generate Fix (AI Code Patch)
+                    </>
+                  )}
+                </button>
+
+                {/* Visual Diff Patch View */}
+                {patchData && patchData.fixes.length > 0 && (
+                  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {patchData.explanation && (
+                      <div style={{
+                        fontSize: '11px',
+                        lineHeight: '1.4',
+                        padding: '8px 10px',
+                        background: 'rgba(0,0,0,0.06)',
+                        borderRadius: '4px',
+                        borderLeft: '2px solid var(--vscode-textLink-foreground)',
+                      }}>
+                        <strong style={{ fontSize: '10px', display: 'block', marginBottom: '3px' }}>Penjelasan Perbaikan:</strong>
+                        {patchData.explanation}
+                      </div>
+                    )}
+                    {patchData.fixes.map((fix, idx) => (
+                      <DiffView
+                        key={idx}
+                        diff={fix}
+                        onApply={() => handleApplyPatch(fix)}
+                        onDismiss={() => handleDismissPatch(idx)}
+                        applying={applyingPatch}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { GitContext } from '../utils/workspaceScanner';
 import { loadProjectConfig, formatProjectConfig, ProjectConfig } from './projectConfig';
+import { buildCodeFixPrompt, parseCodeFixResponse, CodeFixRequest, CodeFixResponse } from './codeFixPrompt';
 
 export interface LineRange {
 	start: number;
@@ -87,6 +88,7 @@ export function parseAIResponse(text: string): AIResponse {
 export interface IAIProvider {
 	analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse>;
 	generateReply(issueDesc: string, currentCodeContext: string): Promise<string>;
+	generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse>;
 }
 
 /**
@@ -296,6 +298,40 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 			return data.choices[0].message.content.trim();
 		});
 	}
+
+	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
+		return executeWithFallback('OpenAI', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrompt = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
+			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
+
+			const response = await fetch('https://api.openai.com/v1/chat/completions', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${this.apiKey}`
+				},
+				body: JSON.stringify({
+					model: model,
+					messages: [
+						{ role: 'system', content: systemPrompt },
+						{ role: 'user', content: prompt }
+					],
+					response_format: { type: "json_object" },
+					temperature: 0.1
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw { status: response.status, message: `OpenAI API Error: ${errText}` };
+			}
+
+			const data = await response.json() as any;
+			const content = data.choices[0].message.content;
+			return parseCodeFixResponse(content);
+		});
+	}
 }
 
 /**
@@ -404,6 +440,39 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			const data = await response.json() as any;
 			return data.candidates[0].content.parts[0].text.trim();
+		});
+	}
+
+	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
+		return executeWithFallback('Gemini', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemInstruction = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
+			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
+
+			const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					contents: [{ parts: [{ text: prompt }] }],
+					systemInstruction: { parts: [{ text: systemInstruction }] },
+					generationConfig: {
+						responseMimeType: "application/json",
+						temperature: 0.1
+					}
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw { status: response.status, message: `Gemini API Error: ${errText}` };
+			}
+
+			const data = await response.json() as any;
+			const content = data.candidates[0].content.parts[0].text;
+			return parseCodeFixResponse(content);
 		});
 	}
 }
@@ -516,6 +585,40 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 			return data.choices[0].message.content.trim();
 		});
 	}
+
+	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
+		return executeWithFallback('Groq', this.models, async (model) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrompt = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
+			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
+
+			const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${this.apiKey}`
+				},
+				body: JSON.stringify({
+					model: model,
+					messages: [
+						{ role: 'system', content: systemPrompt },
+						{ role: 'user', content: prompt }
+					],
+					response_format: { type: "json_object" },
+					temperature: 0.1
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw { status: response.status, message: `Groq API Error: ${errText}` };
+			}
+
+			const data = await response.json() as any;
+			const content = data.choices[0].message.content;
+			return parseCodeFixResponse(content);
+		});
+	}
 }
 
 /**
@@ -603,6 +706,32 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 		const data = await response.json() as any;
 		return data.message.content.trim();
+	}
+
+	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
+		const projectRulesBlock = await buildProjectRulesBlock();
+		const systemPrefix = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}\n\n`;
+		const prompt = `${systemPrefix}${buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined })}`;
+
+		const response = await fetch(`${this.hostUrl}/api/chat`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model: this.model,
+				messages: [{ role: 'user', content: prompt }],
+				format: 'json',
+				stream: false
+			})
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			throw { status: response.status, message: `Ollama Error: ${errText}` };
+		}
+
+		const data = await response.json() as any;
+		const content = data.message.content;
+		return parseCodeFixResponse(content);
 	}
 }
 

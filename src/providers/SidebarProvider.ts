@@ -1,16 +1,23 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { fetchGitHubIssues, postGitHubComment, updateGitHubIssueState, createGitHubIssue } from '../utils/github';
 import { storageManager } from '../extension';
 import { getWorkspaceFiles, getGitContext } from '../utils/workspaceScanner';
 import { AIProviderFactory } from '../ai/AIClient';
 import { loadProjectConfig, getProjectIgnorePatterns } from '../ai/projectConfig';
+import { WorkspaceSemanticIndexer } from '../utils/embedding';
+import { CodeFixRequest } from '../ai/codeFixPrompt';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewId = 'issueMapper.sidebar';
 	private _view?: vscode.WebviewView;
 	private _highlightDecorationType?: vscode.TextEditorDecorationType;
 
-	constructor(private readonly _extensionUri: vscode.Uri) {}
+	constructor(
+		private readonly _extensionUri: vscode.Uri,
+		private readonly _context: vscode.ExtensionContext
+	) {}
 
 	resolveWebviewView(
 		webviewView: vscode.WebviewView,
@@ -32,6 +39,190 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 		webviewView.webview.onDidReceiveMessage(async (message) => {
 			switch (message.command) {
+				case 'generateFix': {
+					await loadProjectConfig();
+					const ignorePatterns = getProjectIgnorePatterns();
+					const gitContext = await getGitContext();
+
+					const activeProvider = storageManager.getActiveProvider();
+					const selectedModel = storageManager.getSelectedModel();
+					let apiKey = '';
+
+					if (activeProvider === 'openai') {
+						apiKey = await storageManager.getApiKey('openai-api-key') || '';
+					} else if (activeProvider === 'gemini') {
+						apiKey = await storageManager.getApiKey('gemini-api-key') || '';
+					} else if (activeProvider === 'groq') {
+						apiKey = await storageManager.getApiKey('groq-api-key') || '';
+					}
+
+					if (!apiKey && activeProvider !== 'ollama') {
+						vscode.window.showWarningMessage(`Kunci API untuk "${activeProvider}" belum dikonfigurasi.`);
+						webviewView.webview.postMessage({
+							command: 'generateFixResult',
+							success: false,
+							error: `Kunci API ${activeProvider.toUpperCase()} belum dikonfigurasi.`
+						});
+						return;
+					}
+
+					try {
+						const client = AIProviderFactory.create(
+							activeProvider,
+							apiKey,
+							selectedModel,
+							activeProvider === 'ollama' ? storageManager.getOllamaHostUrl() : undefined
+						);
+
+						const activeEditor = vscode.window.activeTextEditor;
+						if (!activeEditor) {
+							webviewView.webview.postMessage({
+								command: 'generateFixResult',
+								success: false,
+								error: 'Tidak ada file aktif yang terbuka di editor.'
+							});
+							return;
+						}
+
+						const document = activeEditor.document;
+						const filePath = vscode.workspace.asRelativePath(document.uri);
+						const fileContent = document.getText();
+
+						const request: CodeFixRequest = {
+							filePath,
+							fileContent,
+							issueTitle: message.title || '',
+							issueDescription: message.body || '',
+							gitBranch: gitContext.activeBranch || undefined,
+						};
+
+						const result = await client.generateCodeFix(request);
+
+						webviewView.webview.postMessage({
+							command: 'generateFixResult',
+							success: true,
+							number: message.number,
+							fixes: result.fixes,
+							explanation: result.explanation,
+						});
+					} catch (err: any) {
+						vscode.window.showErrorMessage(`Gagal menghasilkan perbaikan kode: ${err.message}`);
+						webviewView.webview.postMessage({
+							command: 'generateFixResult',
+							success: false,
+							error: err.message || 'Gagal terhubung ke penyedia AI.'
+						});
+					}
+					return;
+				}
+				case 'applyCodePatch': {
+					try {
+						const { filePath: targetPath, oldCode, newCode } = message;
+
+						if (!targetPath || oldCode === undefined || newCode === undefined) {
+							webviewView.webview.postMessage({
+								command: 'applyCodePatchResult',
+								success: false,
+								error: 'Data patch tidak lengkap.'
+							});
+							return;
+						}
+
+						if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+							webviewView.webview.postMessage({
+								command: 'applyCodePatchResult',
+								success: false,
+								error: 'Tidak ada workspace aktif.'
+							});
+							return;
+						}
+
+						const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+						const fullPath = path.join(workspaceRoot, targetPath);
+
+						if (!fs.existsSync(fullPath)) {
+							webviewView.webview.postMessage({
+								command: 'applyCodePatchResult',
+								success: false,
+								error: `Berkas tidak ditemukan: ${targetPath}`
+							});
+							return;
+						}
+
+						const currentContent = fs.readFileSync(fullPath, 'utf8');
+						if (currentContent !== oldCode) {
+							const applyAnyway = await vscode.window.showWarningMessage(
+								`Berkas ${targetPath} telah berubah sejak patch dibuat. Tetap terapkan?`,
+								'Ya, Terapkan',
+								'Batal'
+							);
+							if (applyAnyway !== 'Ya, Terapkan') {
+								webviewView.webview.postMessage({
+									command: 'applyCodePatchResult',
+									success: false,
+									error: 'Patch dibatalkan: berkas telah berubah.',
+									cancelled: true
+								});
+								return;
+							}
+						}
+
+						const confirmApply = await vscode.window.showInformationMessage(
+							`Terapkan patch ke ${targetPath}? Backup akan dibuat sebagai ${targetPath}.backup`,
+							'Terapkan',
+							'Batal'
+						);
+						if (confirmApply !== 'Terapkan') {
+							webviewView.webview.postMessage({
+								command: 'applyCodePatchResult',
+								success: false,
+								error: 'Patch dibatalkan oleh pengguna.',
+								cancelled: true
+							});
+							return;
+						}
+
+						const backupPath = fullPath + '.backup';
+						fs.copyFileSync(fullPath, backupPath);
+
+						const fullContent = fs.readFileSync(fullPath, 'utf8');
+						const updatedContent = fullContent.replace(oldCode, newCode);
+
+						if (updatedContent === fullContent) {
+							fs.unlinkSync(backupPath);
+							webviewView.webview.postMessage({
+								command: 'applyCodePatchResult',
+								success: false,
+								error: 'Tidak dapat menemukan kode yang cocok di berkas untuk diganti.'
+							});
+							return;
+						}
+
+						fs.writeFileSync(fullPath, updatedContent, 'utf8');
+
+						const doc = await vscode.workspace.openTextDocument(fullPath);
+						await vscode.window.showTextDocument(doc);
+
+						vscode.window.showInformationMessage(
+							`Patch berhasil diterapkan ke ${targetPath}. Backup disimpan sebagai ${targetPath}.backup`
+						);
+
+						webviewView.webview.postMessage({
+							command: 'applyCodePatchResult',
+							success: true,
+							filePath: targetPath,
+							backupPath: targetPath + '.backup'
+						});
+					} catch (err: any) {
+						vscode.window.showErrorMessage(`Gagal menerapkan patch: ${err.message}`);
+						webviewView.webview.postMessage({
+							command: 'applyCodePatchResult',
+							success: false,
+							error: err.message || 'Gagal menulis perubahan ke berkas.'
+						});
+					}
+					return;
+				}
 				case 'getIssues': {
 					// Dapatkan issues dari cache dulu jika ada
 					const cached = storageManager.getCachedIssues();
@@ -197,10 +388,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					const currentIssue = cachedIssues.find(i => i.number === message.number);
 					const issueBody = currentIssue ? currentIssue.body : (message.body || '');
 
+					// Menyeleksi berkas paling relevan menggunakan Semantic Search lokal (Ollama / TF-IDF)
+					let filesToAnalyze = files;
+					if (files.length > 25) {
+						try {
+							const indexer = new WorkspaceSemanticIndexer(this._context);
+							filesToAnalyze = await indexer.findRelevantFiles(message.title || '', issueBody, 20);
+						} catch (e) {
+							console.error('Pencarian semantik gagal, fallback ke semua berkas:', e);
+						}
+					}
+
 					if (!apiKey && activeProvider !== 'ollama') {
 						// Fallback ke simulasi jika kunci API belum diset
 						vscode.window.showWarningMessage(`Kunci API untuk "${activeProvider}" belum dikonfigurasi. Menggunakan hasil simulasi.`);
-						const analysis = await this._getMockAnalysis(message.number, message.title, files);
+						const analysis = await this._getMockAnalysis(message.number, message.title, filesToAnalyze);
 						webviewView.webview.postMessage({
 							command: 'analysisResult',
 							number: message.number,
@@ -219,7 +421,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							activeProvider === 'ollama' ? storageManager.getOllamaHostUrl() : undefined
 						);
 
-						const analysis = await client.analyzeIssue(message.title, issueBody, files, gitContext);
+						const analysis = await client.analyzeIssue(message.title, issueBody, filesToAnalyze, gitContext);
 
 						webviewView.webview.postMessage({
 							command: 'analysisResult',
@@ -231,7 +433,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 						vscode.window.showErrorMessage(`Gagal melakukan analisis AI: ${err.message}`);
 
 						// Jika gagal, fallback ke mock analisis
-						const analysis = await this._getMockAnalysis(message.number, message.title, files);
+						const analysis = await this._getMockAnalysis(message.number, message.title, filesToAnalyze);
 						webviewView.webview.postMessage({
 							command: 'analysisResult',
 							number: message.number,
