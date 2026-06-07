@@ -1,18 +1,54 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { exec } from 'child_process';
 
 export interface RepositoryInfo {
 	owner: string;
 	repo: string;
 }
 
+export interface GitCommitInfo {
+	hash: string;
+	message: string;
+	files: string[];
+}
+
+export interface GitContext {
+	activeBranch: string;
+	unstagedFiles: string[];
+	recentCommits: GitCommitInfo[];
+}
+
+/**
+ * Menjalankan perintah git di dalam root folder workspace aktif
+ * dan mengembalikan stdout dalam bentuk string.
+ */
+function execGitCommand(args: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) {
+			reject(new Error('Tidak ada workspace aktif.'));
+			return;
+		}
+		const cwd = workspaceFolders[0].uri.fsPath;
+		exec(`git ${args}`, { cwd, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+			if (err) {
+				reject(err);
+				return;
+			}
+			resolve(stdout.trim());
+		});
+	});
+}
+
 /**
  * Mendapatkan daftar path relatif berkas di workspace secara asinkron.
  * Menyaring folder dependensi pihak ketiga, folder kompilasi, serta berkas biner
  * dari berbagai bahasa pemrograman (JS, Python, Go, Rust, Java, C++, dll.).
+ * @param extraIgnorePatterns Pola eksklusi tambahan dari konfigurasi proyek (misal .issuemaprc).
  */
-export async function getWorkspaceFiles(): Promise<string[]> {
+export async function getWorkspaceFiles(extraIgnorePatterns?: string[]): Promise<string[]> {
 	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
 		return [];
 	}
@@ -25,7 +61,7 @@ export async function getWorkspaceFiles(): Promise<string[]> {
 	// - Go/Ruby/PHP: vendor, .bundle
 	// - Version Control: .git, .svn, .hg
 	// - Binary & Assets: Gambar, video, audio, arsip kompresi, berkas executable
-	const excludePattern = '{' + [
+	const defaultPatterns = [
 		'**/node_modules/**', '**/.git/**', '**/.svn/**', '**/.hg/**',
 		'**/dist/**', '**/build/**', '**/out/**', '**/bin/**',
 		'**/.next/**', '**/.nuxt/**', '**/.cache/**',
@@ -36,7 +72,13 @@ export async function getWorkspaceFiles(): Promise<string[]> {
 		'**/*.webp', '**/*.mp4', '**/*.mp3', '**/*.wav', '**/*.pdf',
 		'**/*.zip', '**/*.tar.gz', '**/*.rar', '**/*.7z',
 		'**/*.exe', '**/*.dll', '**/*.so', '**/*.dylib', '**/*.dmg'
-	].join(',') + '}';
+	];
+
+	const allPatterns = extraIgnorePatterns && extraIgnorePatterns.length > 0
+		? [...defaultPatterns, ...extraIgnorePatterns]
+		: defaultPatterns;
+
+	const excludePattern = '{' + allPatterns.join(',') + '}';
 	
 	try {
 		const files = await vscode.workspace.findFiles('**/*', excludePattern, 1000);
@@ -96,6 +138,50 @@ export async function getGitHubRepositoryInfo(): Promise<RepositoryInfo | undefi
 	}
 
 	return undefined;
+}
+
+/**
+ * Mendapatkan konteks Git lokal: branch aktif, status unstaged,
+ * dan daftar berkas yang dimodifikasi pada 5 commit terakhir.
+ */
+export async function getGitContext(): Promise<GitContext> {
+	const empty: GitContext = { activeBranch: '', unstagedFiles: [], recentCommits: [] };
+
+	try {
+		const [branch, status, logOutput] = await Promise.all([
+			execGitCommand('rev-parse --abbrev-ref HEAD'),
+			execGitCommand('status --porcelain'),
+			execGitCommand('log --name-only --oneline -n 5')
+		]);
+
+		const unstagedFiles: string[] = status
+			.split('\n')
+			.filter(line => line.trim().length > 0)
+			.map(line => line.trim().replace(/^(.)\s+/, ''));
+
+		const recentCommits: GitCommitInfo[] = [];
+		const logLines = logOutput.split('\n');
+		let currentCommit: GitCommitInfo | null = null;
+
+		for (const line of logLines) {
+			const commitMatch = line.match(/^([a-f0-9]{7,})\s(.+)/);
+			if (commitMatch) {
+				if (currentCommit) {
+					recentCommits.push(currentCommit);
+				}
+				currentCommit = { hash: commitMatch[1], message: commitMatch[2], files: [] };
+			} else if (currentCommit && line.trim().length > 0) {
+				currentCommit.files.push(line.trim());
+			}
+		}
+		if (currentCommit) {
+			recentCommits.push(currentCommit);
+		}
+
+		return { activeBranch: branch, unstagedFiles, recentCommits };
+	} catch (e) {
+		return empty;
+	}
 }
 
 /**
