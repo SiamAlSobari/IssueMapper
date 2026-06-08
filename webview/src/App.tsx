@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import SettingsPanel from './components/SettingsPanel';
 import CreateIssuePanel from './components/CreateIssuePanel';
-import DiffView, { DiffBlock } from './components/DiffView';
+import DiffView, { type DiffBlock } from './components/DiffView';
 
 // Tipe data issue sesuai backend
 interface GitHubIssue {
@@ -68,13 +68,33 @@ function parseInlineMarkdown(text: string) {
   return parts;
 }
 
-function renderMarkdown(text: string) {
+function renderMarkdown(text: string, onToggleCheckbox?: (lineIndex: number, checked: boolean) => void) {
   if (!text) return <p style={{ fontStyle: 'italic', opacity: 0.5 }}>Tidak ada deskripsi.</p>;
   
   const lines = text.split('\n');
   return lines.map((line, idx) => {
     const trimmed = line.trim();
     
+    // Task list item: - [ ] or - [x]
+    const taskMatch = trimmed.match(/^- \[( |x)\] (.+)/);
+    if (taskMatch) {
+      const checked = taskMatch[1] === 'x';
+      const taskText = taskMatch[2];
+      return (
+        <label key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', margin: '4px 0', fontSize: '11.5px', lineHeight: '1.4', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={() => onToggleCheckbox?.(idx, !checked)}
+            style={{ marginTop: '3px', cursor: 'pointer', accentColor: 'var(--vscode-textLink-foreground, #007acc)' }}
+          />
+          <span style={{ flex: 1, textDecoration: checked ? 'line-through' : 'none', opacity: checked ? 0.6 : 1 }}>
+            {parseInlineMarkdown(taskText)}
+          </span>
+        </label>
+      );
+    }
+
     // Headers
     if (trimmed.startsWith('### ')) {
       return <h5 key={idx} style={{ margin: '10px 0 6px 0', fontSize: '12px', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '2px' }}>{trimmed.slice(4)}</h5>;
@@ -351,6 +371,12 @@ export default function App() {
             setAnalysisError(message.error || 'Gagal menerapkan patch.');
           }
           break;
+        case 'updateIssueBodyResult':
+          if (!message.success) {
+            setSubmitSuccessMsg('Gagal menyinkronkan perubahan checklist ke GitHub.');
+            setTimeout(() => setSubmitSuccessMsg(''), 3000);
+          }
+          break;
       }
     };
 
@@ -489,6 +515,28 @@ export default function App() {
       oldCode: fix.oldCode,
       newCode: fix.newCode,
     });
+  };
+
+  // Toggle checkbox di deskripsi issue dan kirim update ke GitHub
+  const handleToggleCheckbox = (lineIndex: number, checked: boolean) => {
+    if (!selectedIssue) return;
+    const lines = selectedIssue.body.split('\n');
+    if (lineIndex >= 0 && lineIndex < lines.length) {
+      const currentLine = lines[lineIndex];
+      const updatedLine = currentLine.replace(/^- \[( |x)\]/, `- [${checked ? 'x' : ' '}]`);
+      if (updatedLine !== currentLine) {
+        lines[lineIndex] = updatedLine;
+        const newBody = lines.join('\n');
+        setSelectedIssue(prev => prev ? { ...prev, body: newBody } : null);
+        if (vscode) {
+          vscode.postMessage({
+            command: 'updateIssueBody',
+            number: selectedIssue.number,
+            body: newBody,
+          });
+        }
+      }
+    }
   };
 
   const handleDismissPatch = (index: number) => {
@@ -1254,7 +1302,7 @@ export default function App() {
               maxHeight: '180px',
               overflowY: 'auto'
             }}>
-              {renderMarkdown(selectedIssue.body)}
+              {renderMarkdown(selectedIssue.body, handleToggleCheckbox)}
             </div>
           </div>
 
