@@ -86,7 +86,7 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		
 		// Gunakan Promise.race dengan timeout 5 detik agar tidak menggantung jika jaringan bermasalah
 		const response = await Promise.race([
-			graphql<{ repository: any; viewer: { login: string } }>(
+			graphql<{ repository: { issues: { nodes: { number: number; title: string; body: string | null; state: string; author: { login: string } | null; labels: { nodes: { name: string; color: string }[] } }[] } }; viewer: { login: string } }>(
 				`
 				query ($owner: String!, $repo: String!, $limit: Int!) {
 					viewer {
@@ -130,17 +130,18 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		// 4. Format hasil mapping GraphQL
 		if (response && response.repository && response.repository.issues) {
 			const currentUser = response.viewer?.login;
-			const issues: GitHubIssue[] = response.repository.issues.nodes.map((node: any) => ({
-				number: node.number,
-				title: node.title,
-				body: node.body || '',
-				state: node.state.toLowerCase(), // GraphQL menghasilkan status kapital (OPEN/CLOSED), ubah ke lowercase
-				author: node.author?.login || 'ghost',
-				labels: (node.labels?.nodes || []).map((l: any) => ({
-					name: l.name || '',
-					color: l.color || 'cfd3d7'
-				}))
-			}));
+		const nodes = response.repository.issues.nodes;
+		const issues: GitHubIssue[] = nodes.map((node) => ({
+			number: node.number,
+			title: node.title,
+			body: node.body || '',
+			state: node.state.toLowerCase(),
+			author: node.author?.login || 'ghost',
+			labels: (node.labels?.nodes || []).map((l) => ({
+				name: l.name || '',
+				color: l.color || 'cfd3d7'
+			}))
+		}));
 
 			return {
 				issues,
@@ -178,10 +179,10 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 export async function postGitHubComment(issueNumber: number, body: string): Promise<boolean> {
 	try {
 		const repoInfo = await getGitHubRepositoryInfo();
-		if (!repoInfo) return false;
+		if (!repoInfo) { return false; }
 
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
-		if (!session) return false;
+		if (!session) { return false; }
 
 		const { Octokit } = await import('@octokit/rest');
 		const octokit = new Octokit({ auth: session.accessToken });
@@ -206,10 +207,10 @@ export async function postGitHubComment(issueNumber: number, body: string): Prom
 export async function updateGitHubIssueState(issueNumber: number, state: 'open' | 'closed'): Promise<boolean> {
 	try {
 		const repoInfo = await getGitHubRepositoryInfo();
-		if (!repoInfo) return false;
+		if (!repoInfo) { return false; }
 
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
-		if (!session) return false;
+		if (!session) { return false; }
 
 		const { Octokit } = await import('@octokit/rest');
 		const octokit = new Octokit({ auth: session.accessToken });
@@ -231,13 +232,41 @@ export async function updateGitHubIssueState(issueNumber: number, state: 'open' 
  * Membuat issue baru di GitHub menggunakan REST API.
  * POST /repos/{owner}/{repo}/issues
  */
+/**
+ * Memperbarui body/deskripsi issue GitHub menggunakan REST API.
+ * PATCH /repos/{owner}/{repo}/issues/{issue_number}
+ */
+export async function updateGitHubIssueBody(issueNumber: number, body: string): Promise<boolean> {
+	try {
+		const repoInfo = await getGitHubRepositoryInfo();
+		if (!repoInfo) { return false; }
+
+		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
+		if (!session) { return false; }
+
+		const { Octokit } = await import('@octokit/rest');
+		const octokit = new Octokit({ auth: session.accessToken });
+
+		await octokit.issues.update({
+			owner: repoInfo.owner,
+			repo: repoInfo.repo,
+			issue_number: issueNumber,
+			body
+		});
+		return true;
+	} catch (error) {
+		console.error(`Gagal memperbarui body issue #${issueNumber}:`, error);
+		return false;
+	}
+}
+
 export async function createGitHubIssue(title: string, body: string): Promise<GitHubIssue | null> {
 	try {
 		const repoInfo = await getGitHubRepositoryInfo();
-		if (!repoInfo) return null;
+		if (!repoInfo) { return null; }
 
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
-		if (!session) return null;
+		if (!session) { return null; }
 
 		const { Octokit } = await import('@octokit/rest');
 		const octokit = new Octokit({ auth: session.accessToken });
@@ -264,9 +293,9 @@ export async function createGitHubIssue(title: string, body: string): Promise<Gi
 			body: response.data.body || '',
 			state: response.data.state,
 			author: username,
-			labels: response.data.labels.map((l: any) => ({
-				name: typeof l === 'string' ? l : (l.name || ''),
-				color: typeof l === 'string' ? 'cfd3d7' : (l.color || 'cfd3d7')
+			labels: response.data.labels.map((l: Record<string, unknown> | string) => ({
+				name: typeof l === 'string' ? l : ((l as Record<string, unknown>).name as string || ''),
+				color: typeof l === 'string' ? 'cfd3d7' : ((l as Record<string, unknown>).color as string || 'cfd3d7')
 			}))
 		};
 	} catch (error) {

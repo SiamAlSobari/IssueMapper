@@ -13,6 +13,19 @@ export interface AIResponse {
 	summary: string;
 }
 
+interface OpenAIResponse {
+	choices: { message: { content: string } }[];
+}
+interface GeminiResponse {
+	candidates: { content: { parts: { text: string }[] } }[];
+}
+interface GroqResponse {
+	choices: { message: { content: string } }[];
+}
+interface OllamaChatResponse {
+	message: { content: string };
+}
+
 /**
  * Mengurai string JSON respons AI secara tangguh (robust JSON parser).
  * Membersihkan format blok kode markdown dan melakukan penormalan/validasi struktur.
@@ -27,15 +40,15 @@ export function parseAIResponse(text: string): AIResponse {
 	}
 	cleanText = cleanText.trim();
 
-	let parsed: any;
+	let parsed: Record<string, unknown>;
 	try {
-		parsed = JSON.parse(cleanText);
-	} catch (e) {
+		parsed = JSON.parse(cleanText) as Record<string, unknown>;
+	} catch {
 		// Jika gagal parse langsung, coba cari JSON terluar dengan regex
 		const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
 		if (jsonMatch) {
 			try {
-				parsed = JSON.parse(jsonMatch[0]);
+				parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
 			} catch (innerError) {
 				console.error("Gagal mengurai JSON dengan pencocokan regex terluar:", cleanText);
 				throw new Error(`Respons dari AI bukan JSON yang valid. Gagal parsing.`);
@@ -47,24 +60,26 @@ export function parseAIResponse(text: string): AIResponse {
 	}
 
 	// Normalisasi dan validasi struktur AIResponse
-	const files: any[] = Array.isArray(parsed.files) ? parsed.files : [];
+	const files: Record<string, unknown>[] = Array.isArray(parsed.files) ? (parsed.files as Record<string, unknown>[]) : [];
 	const summary: string = typeof parsed.summary === 'string' ? parsed.summary : '';
 
-	const formattedFiles = files.map((f: any) => {
+	const formattedFiles = files.map((f: Record<string, unknown>) => {
 		let confidence: 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM';
 		if (f.confidence === 'HIGH' || f.confidence === 'LOW' || f.confidence === 'MEDIUM') {
 			confidence = f.confidence;
 		} else if (typeof f.confidence === 'string') {
 			const upper = f.confidence.toUpperCase();
 			if (upper === 'HIGH' || upper === 'MEDIUM' || upper === 'LOW') {
-				confidence = upper as any;
+				confidence = upper as 'HIGH' | 'MEDIUM' | 'LOW';
 			}
 		}
 
 		let lineRange: LineRange | undefined = undefined;
-		if (f.lineRange && typeof f.lineRange === 'object') {
-			const start = typeof f.lineRange.start === 'number' && f.lineRange.start > 0 ? f.lineRange.start : undefined;
-			const end = typeof f.lineRange.end === 'number' && f.lineRange.end > 0 ? f.lineRange.end : undefined;
+		const rawLineRange = f.lineRange;
+		if (rawLineRange && typeof rawLineRange === 'object') {
+			const lr = rawLineRange as Record<string, unknown>;
+			const start = typeof lr.start === 'number' && lr.start > 0 ? lr.start : undefined;
+			const end = typeof lr.end === 'number' && lr.end > 0 ? lr.end : undefined;
 			if (start !== undefined && end !== undefined && end >= start) {
 				lineRange = { start, end };
 			}
@@ -108,7 +123,7 @@ async function buildProjectRulesBlock(): Promise<string> {
 		}
 
 		return `\n\n---\nAturan & Panduan Proyek Lokal:\n${formatted}`;
-	} catch (e) {
+	} catch {
 		return '';
 	}
 }
@@ -168,12 +183,13 @@ async function executeWithFallback<T>(
 			
 			console.log(`[${providerName}] Berhasil menggunakan model: ${currentModel}`);
 			return result;
-		} catch (error: any) {
-			lastError = error;
-			const isRateLimit = error.status === 429 || error.message?.includes('429');
-			const isServerError = error.status >= 500 || error.message?.includes('50') || error.message?.includes('timeout');
+		} catch (error: unknown) {
+			const err = error instanceof Error ? error : new Error(String(error));
+			lastError = err;
+			const isRateLimit = (err as { status?: number }).status === 429 || err.message?.includes('429');
+			const isServerError = (err as { status?: number }).status !== undefined && (err as { status?: number }).status! >= 500 || err.message?.includes('50') || err.message?.includes('timeout');
 			
-			console.warn(`[${providerName}] Gagal dengan model ${currentModel}: ${error.message}`);
+			console.warn(`[${providerName}] Gagal dengan model ${currentModel}: ${err.message}`);
 			
 			if (i < models.length - 1 && (isRateLimit || isServerError)) {
 				// Berikan notifikasi senyap di status bar VS Code mengenai fallback
@@ -259,10 +275,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `OpenAI API Error: ${errText}` };
+				throw Object.assign(new Error(`OpenAI API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as OpenAIResponse;
 			const content = data.choices[0].message.content;
 			return parseAIResponse(content);
 		});
@@ -291,10 +307,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `OpenAI API Error: ${errText}` };
+				throw Object.assign(new Error(`OpenAI API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as OpenAIResponse;
 			return data.choices[0].message.content.trim();
 		});
 	}
@@ -324,10 +340,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `OpenAI API Error: ${errText}` };
+				throw Object.assign(new Error(`OpenAI API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as OpenAIResponse;
 			const content = data.choices[0].message.content;
 			return parseCodeFixResponse(content);
 		});
@@ -402,10 +418,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Gemini API Error: ${errText}` };
+				throw Object.assign(new Error(`Gemini API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GeminiResponse;
 			const content = data.candidates[0].content.parts[0].text;
 			return parseAIResponse(content);
 		});
@@ -435,10 +451,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Gemini API Error: ${errText}` };
+				throw Object.assign(new Error(`Gemini API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GeminiResponse;
 			return data.candidates[0].content.parts[0].text.trim();
 		});
 	}
@@ -467,10 +483,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Gemini API Error: ${errText}` };
+				throw Object.assign(new Error(`Gemini API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GeminiResponse;
 			const content = data.candidates[0].content.parts[0].text;
 			return parseCodeFixResponse(content);
 		});
@@ -546,10 +562,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Groq API Error: ${errText}` };
+				throw Object.assign(new Error(`Groq API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GroqResponse;
 			const content = data.choices[0].message.content;
 			return parseAIResponse(content);
 		});
@@ -578,10 +594,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Groq API Error: ${errText}` };
+				throw Object.assign(new Error(`Groq API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GroqResponse;
 			return data.choices[0].message.content.trim();
 		});
 	}
@@ -611,10 +627,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 			if (!response.ok) {
 				const errText = await response.text();
-				throw { status: response.status, message: `Groq API Error: ${errText}` };
+				throw Object.assign(new Error(`Groq API Error: ${errText}`), { status: response.status });
 			}
 
-			const data = await response.json() as any;
+			const data = await response.json() as GroqResponse;
 			const content = data.choices[0].message.content;
 			return parseCodeFixResponse(content);
 		});
@@ -674,10 +690,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 		if (!response.ok) {
 			const errText = await response.text();
-			throw { status: response.status, message: `Ollama Error: ${errText}` };
+			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
 		}
 
-		const data = await response.json() as any;
+		const data = await response.json() as OllamaChatResponse;
 		const content = data.message.content;
 		return parseAIResponse(content);
 	}
@@ -701,10 +717,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 		if (!response.ok) {
 			const errText = await response.text();
-			throw { status: response.status, message: `Ollama Error: ${errText}` };
+			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
 		}
 
-		const data = await response.json() as any;
+		const data = await response.json() as OllamaChatResponse;
 		return data.message.content.trim();
 	}
 
@@ -726,10 +742,10 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 
 		if (!response.ok) {
 			const errText = await response.text();
-			throw { status: response.status, message: `Ollama Error: ${errText}` };
+			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
 		}
 
-		const data = await response.json() as any;
+		const data = await response.json() as OllamaChatResponse;
 		const content = data.message.content;
 		return parseCodeFixResponse(content);
 	}

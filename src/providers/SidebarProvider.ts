@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fetchGitHubIssues, postGitHubComment, updateGitHubIssueState, createGitHubIssue } from '../utils/github';
+import { fetchGitHubIssues, postGitHubComment, updateGitHubIssueState, updateGitHubIssueBody, createGitHubIssue } from '../utils/github';
 import { storageManager } from '../extension';
 import { getWorkspaceFiles, getGitContext } from '../utils/workspaceScanner';
 import { AIProviderFactory } from '../ai/AIClient';
@@ -105,12 +105,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							fixes: result.fixes,
 							explanation: result.explanation,
 						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal menghasilkan perbaikan kode: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal menghasilkan perbaikan kode: ${(err as Error).message}`);
 						webviewView.webview.postMessage({
 							command: 'generateFixResult',
 							success: false,
-							error: err.message || 'Gagal terhubung ke penyedia AI.'
+							error: (err as Error).message || 'Gagal terhubung ke penyedia AI.'
 						});
 					}
 					return;
@@ -213,12 +213,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							filePath: targetPath,
 							backupPath: targetPath + '.backup'
 						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal menerapkan patch: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal menerapkan patch: ${(err as Error).message}`);
 						webviewView.webview.postMessage({
 							command: 'applyCodePatchResult',
 							success: false,
-							error: err.message || 'Gagal menulis perubahan ke berkas.'
+							error: (err as Error).message || 'Gagal menulis perubahan ke berkas.'
 						});
 					}
 					return;
@@ -356,8 +356,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 								}
 							}, timeoutMs);
 						}
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal membuka berkas: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal membuka berkas: ${(err as Error).message}`);
 					}
 					return;
 				}
@@ -429,8 +429,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							files: analysis.files,
 							summary: analysis.summary
 						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal melakukan analisis AI: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal melakukan analisis AI: ${(err as Error).message}`);
 
 						// Jika gagal, fallback ke mock analisis
 						const analysis = await this._getMockAnalysis(message.number, message.title, filesToAnalyze);
@@ -439,7 +439,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							number: message.number,
 							files: analysis.files,
 							summary: `[Koneksi AI Gagal] Fallback ke data simulasi:\n\n${analysis.summary}`,
-							error: err.message || 'Gagal terhubung ke penyedia AI.'
+							error: (err as Error).message || 'Gagal terhubung ke penyedia AI.'
 						});
 					}
 					return;
@@ -503,13 +503,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							number: message.number,
 							suggestion
 						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal menghasilkan draf saran AI: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal menghasilkan draf saran AI: ${(err as Error).message}`);
 						const mockSuggestion = this._getMockSuggestion(message.number, issueTitle);
 						webviewView.webview.postMessage({
 							command: 'quickSuggestResult',
 							number: message.number,
-							suggestion: `[Gagal koneksi AI: ${err.message}] Fallback ke data simulasi:\n\n${mockSuggestion}`
+							suggestion: `[Gagal koneksi AI: ${(err as Error).message}] Fallback ke data simulasi:\n\n${mockSuggestion}`
 						});
 					}
 					return;
@@ -555,8 +555,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							selectedModel: storageManager.getSelectedModel(),
 							ollamaHostUrl: storageManager.getOllamaHostUrl()
 						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal menyimpan pengaturan: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal menyimpan pengaturan: ${(err as Error).message}`);
 					}
 					return;
 				}
@@ -575,8 +575,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							hasGeminiKey,
 							hasGroqKey
 						});
-					} catch (err: any) {
-						console.error("Gagal memuat pengaturan:", err);
+					} catch (err: unknown) {
+						console.error("Gagal memuat pengaturan:", String(err));
 					}
 					return;
 				}
@@ -611,8 +611,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 							});
 							vscode.window.showInformationMessage("Berhasil terhubung dengan GitHub!");
 						}
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Gagal menghubungkan GitHub: ${err.message}`);
+					} catch (err: unknown) {
+						vscode.window.showErrorMessage(`Gagal menghubungkan GitHub: ${(err as Error).message}`);
 					}
 					return;
 				}
@@ -698,7 +698,34 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					});
 					return;
 				}
-				case 'createIssue': {
+				case 'updateIssueBody': {
+					const bodySuccess = await updateGitHubIssueBody(message.number, message.body);
+					if (bodySuccess) {
+						const issueList = storageManager.getCachedIssues();
+						const updatedIssueList = issueList.map(iss => {
+							if (iss.number === message.number) {
+								return { ...iss, body: message.body };
+							}
+							return iss;
+						});
+						await storageManager.setCachedIssues(updatedIssueList);
+						webviewView.webview.postMessage({
+							command: 'updateIssueBodyResult',
+							success: true,
+							number: message.number,
+							body: message.body,
+							updatedIssues: updatedIssueList
+						});
+					} else {
+						webviewView.webview.postMessage({
+							command: 'updateIssueBodyResult',
+							success: false,
+							number: message.number
+						});
+					}
+					return;
+				}
+			case 'createIssue': {
 					const newIssue = await createGitHubIssue(message.title, message.body);
 					if (newIssue) {
 						vscode.window.showInformationMessage(`Issue #${newIssue.number} berhasil dibuat di GitHub.`);

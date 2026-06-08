@@ -103,14 +103,14 @@ export async function getGitHubRepositoryInfo(): Promise<RepositoryInfo | undefi
 			if (repositories && repositories.length > 0) {
 				const repo = repositories[0];
 				const remotes = repo.state.remotes;
-				const origin = remotes.find((r: any) => r.name === 'origin') || remotes[0];
+				const origin = remotes.find((r: { name: string; fetchUrl?: string }) => r.name === 'origin') || remotes[0];
 				if (origin && origin.fetchUrl) {
 					const info = parseGitHubUrl(origin.fetchUrl);
-					if (info) return info;
+					if (info) { return info; }
 				}
 			}
 		}
-	} catch (e) {
+	} catch {
 		// Lanjut ke Cara 2
 	}
 
@@ -133,7 +133,7 @@ export async function getGitHubRepositoryInfo(): Promise<RepositoryInfo | undefi
 				return parseGitHubUrl(url);
 			}
 		}
-	} catch (e) {
+	} catch {
 		// Gagal membaca berkas config
 	}
 
@@ -179,7 +179,7 @@ export async function getGitContext(): Promise<GitContext> {
 		}
 
 		return { activeBranch: branch, unstagedFiles, recentCommits };
-	} catch (e) {
+	} catch {
 		return empty;
 	}
 }
