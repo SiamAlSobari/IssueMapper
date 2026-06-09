@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { getGitHubRepositoryInfo } from './workspaceScanner';
 import { GitHubIssue } from './storageManager';
+import { graphql } from '@octokit/graphql';
+import { Octokit } from '@octokit/rest';
 
 // Mock issues untuk fallback jika token tidak ada, workspace bukan repo git, atau rate limit terlampaui
 const MOCK_ISSUES: GitHubIssue[] = [
@@ -82,7 +84,6 @@ export async function fetchGitHubIssues(forceRefresh: boolean = false): Promise<
 		}
 		authenticated = true;
 
-		const { graphql } = await import('@octokit/graphql');
 		
 		// Gunakan Promise.race dengan timeout 5 detik agar tidak menggantung jika jaringan bermasalah
 		const response = await Promise.race([
@@ -184,7 +185,7 @@ export async function postGitHubComment(issueNumber: number, body: string): Prom
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
 		if (!session) { return false; }
 
-		const { Octokit } = await import('@octokit/rest');
+
 		const octokit = new Octokit({ auth: session.accessToken });
 
 		await octokit.issues.createComment({
@@ -212,7 +213,7 @@ export async function updateGitHubIssueState(issueNumber: number, state: 'open' 
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
 		if (!session) { return false; }
 
-		const { Octokit } = await import('@octokit/rest');
+
 		const octokit = new Octokit({ auth: session.accessToken });
 
 		await octokit.issues.update({
@@ -244,7 +245,7 @@ export async function updateGitHubIssueBody(issueNumber: number, body: string): 
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
 		if (!session) { return false; }
 
-		const { Octokit } = await import('@octokit/rest');
+
 		const octokit = new Octokit({ auth: session.accessToken });
 
 		await octokit.issues.update({
@@ -268,7 +269,7 @@ export async function createGitHubIssue(title: string, body: string): Promise<Gi
 		const session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: false });
 		if (!session) { return null; }
 
-		const { Octokit } = await import('@octokit/rest');
+
 		const octokit = new Octokit({ auth: session.accessToken });
 
 		const response = await octokit.issues.create({

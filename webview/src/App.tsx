@@ -201,7 +201,7 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [noIssues, setNoIssues] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const [currentUser, setCurrentUser] = useState('Colorful');
+  const [currentUser, setCurrentUser] = useState('');
 
   // Filter creator
   const [creatorFilter, setCreatorFilter] = useState<'all' | 'me' | 'others'>('all');
@@ -214,6 +214,8 @@ export default function App() {
 
   // Ref untuk scroll otomatis textarea ke bawah setelah Quick Suggest
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectedIssueRef = useRef(selectedIssue);
+  selectedIssueRef.current = selectedIssue;
 
   // Load awal & listener pesan IPC
   useEffect(() => {
@@ -315,7 +317,7 @@ export default function App() {
           break;
         case 'analysisResult':
           // Pastikan hasil AI yang masuk cocok dengan issue yang sedang aktif dibuka
-          if (selectedIssue && selectedIssue.number === message.number) {
+          if (selectedIssueRef.current && selectedIssueRef.current.number === message.number) {
             setAiFiles(message.files || []);
             setAiSummary(message.summary || '');
             setAnalysisError(message.error || null);
@@ -323,7 +325,7 @@ export default function App() {
           }
           break;
         case 'quickSuggestResult':
-          if (selectedIssue && selectedIssue.number === message.number) {
+          if (selectedIssueRef.current && selectedIssueRef.current.number === message.number) {
             setCommentText(message.suggestion);
             setSuggestLoading(false);
             if (textareaRef.current) {
@@ -386,7 +388,7 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [selectedIssue]);
+  }, []);
 
   // Simpan filter saat berubah
   useEffect(() => {

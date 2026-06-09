@@ -164,30 +164,27 @@ function formatGitContext(gitContext?: GitContext): string {
 async function executeWithFallback<T>(
 	providerName: string,
 	models: string[],
-	requestFn: (model: string) => Promise<T>
+	requestFn: (model: string, signal: AbortSignal) => Promise<T>
 ): Promise<T> {
 	let lastError: Error | null = null;
 
 	for (let i = 0; i < models.length; i++) {
 		const currentModel = models[i];
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 7000);
 		console.log(`[${providerName}] Mencoba model: ${currentModel}`);
 		
 		try {
-			// Jalankan request dengan timeout 7 detik per percobaan model
-			const result = await Promise.race([
-				requestFn(currentModel),
-				new Promise<never>((_, reject) => 
-					setTimeout(() => reject(new Error(`Timeout batas waktu request (7 detik) terlampaui.`)), 7000)
-				)
-			]);
-			
+			const result = await requestFn(currentModel, controller.signal);
+			clearTimeout(timeoutId);
 			console.log(`[${providerName}] Berhasil menggunakan model: ${currentModel}`);
 			return result;
 		} catch (error: unknown) {
+			clearTimeout(timeoutId);
 			const err = error instanceof Error ? error : new Error(String(error));
 			lastError = err;
 			const isRateLimit = (err as { status?: number }).status === 429 || err.message?.includes('429');
-			const isServerError = (err as { status?: number }).status !== undefined && (err as { status?: number }).status! >= 500 || err.message?.includes('50') || err.message?.includes('timeout');
+			const isServerError = (err as { status?: number }).status !== undefined && (err as { status?: number }).status! >= 500 || err.message?.includes('50') || err.message?.includes('timeout') || err.message?.includes('abort');
 			
 			console.warn(`[${providerName}] Gagal dengan model ${currentModel}: ${err.message}`);
 			
@@ -221,7 +218,7 @@ export class OpenAIProvider implements IAIProvider {
 	}
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
-		return executeWithFallback('OpenAI', this.models, async (model) => {
+		return executeWithFallback('OpenAI', this.models, async (model, signal) => {
 			const gitSection = formatGitContext(gitContext);
 			const gitBlock = gitSection
 				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
@@ -262,6 +259,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -285,7 +283,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
-		return executeWithFallback('OpenAI', this.models, async (model) => {
+		return executeWithFallback('OpenAI', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemPrompt = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
 
@@ -295,6 +293,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -316,7 +315,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
-		return executeWithFallback('OpenAI', this.models, async (model) => {
+		return executeWithFallback('OpenAI', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemPrompt = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
 			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
@@ -327,6 +326,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -365,7 +365,7 @@ export class GeminiProvider implements IAIProvider {
 	}
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
-		return executeWithFallback('Gemini', this.models, async (model) => {
+		return executeWithFallback('Gemini', this.models, async (model, signal) => {
 			const gitSection = formatGitContext(gitContext);
 			const gitBlock = gitSection
 				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
@@ -406,6 +406,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				headers: {
 					'Content-Type': 'application/json'
 				},
+				signal,
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
 					systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -428,7 +429,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
-		return executeWithFallback('Gemini', this.models, async (model) => {
+		return executeWithFallback('Gemini', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemInstruction = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
 
@@ -440,6 +441,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				headers: {
 					'Content-Type': 'application/json'
 				},
+				signal,
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
 					systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -460,7 +462,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
-		return executeWithFallback('Gemini', this.models, async (model) => {
+		return executeWithFallback('Gemini', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemInstruction = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
 			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
@@ -471,6 +473,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 				headers: {
 					'Content-Type': 'application/json'
 				},
+				signal,
 				body: JSON.stringify({
 					contents: [{ parts: [{ text: prompt }] }],
 					systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -508,7 +511,7 @@ export class GroqProvider implements IAIProvider {
 	}
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
-		return executeWithFallback('Groq', this.models, async (model) => {
+		return executeWithFallback('Groq', this.models, async (model, signal) => {
 			const gitSection = formatGitContext(gitContext);
 			const gitBlock = gitSection
 				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
@@ -549,6 +552,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -572,7 +576,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
-		return executeWithFallback('Groq', this.models, async (model) => {
+		return executeWithFallback('Groq', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemPrompt = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}`;
 
@@ -582,6 +586,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -603,7 +608,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 	}
 
 	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
-		return executeWithFallback('Groq', this.models, async (model) => {
+		return executeWithFallback('Groq', this.models, async (model, signal) => {
 			const projectRulesBlock = await buildProjectRulesBlock();
 			const systemPrompt = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}`;
 			const prompt = buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined });
@@ -614,6 +619,7 @@ Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin
 					'Content-Type': 'application/json',
 					'Authorization': `Bearer ${this.apiKey}`
 				},
+				signal,
 				body: JSON.stringify({
 					model: model,
 					messages: [
@@ -644,15 +650,16 @@ export class OllamaProvider implements IAIProvider {
 	constructor(private hostUrl: string = 'http://localhost:11434', private model: string = 'llama3') {}
 
 	async analyzeIssue(issueTitle: string, issueDesc: string, filePaths: string[], gitContext?: GitContext): Promise<AIResponse> {
-		const gitSection = formatGitContext(gitContext);
-		const gitBlock = gitSection
-			? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
-			: '';
+		return executeWithFallback('Ollama', [this.model], async (model, signal) => {
+			const gitSection = formatGitContext(gitContext);
+			const gitBlock = gitSection
+				? `\n\nKonteks Git Lokal (Status Repositori):\n${gitSection}`
+				: '';
 
-		const projectRulesBlock = await buildProjectRulesBlock();
-		const systemPrefix = `You are an expert developer assistant.${projectRulesBlock}\n\n`;
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrefix = `You are an expert developer assistant.${projectRulesBlock}\n\n`;
 
-		const prompt = `${systemPrefix}Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
+			const prompt = `${systemPrefix}Anda adalah asisten triase kode ahli. Tugas Anda adalah menganalisis deskripsi issue GitHub dan mencocokkannya dengan daftar berkas relatif workspace proyek untuk menemukan lokasi bug. Untuk setiap berkas yang direkomendasikan, estimasikan juga rentang baris (line range) yang kemungkinan berisi masalah dan nama simbol/fungsi terkait jika memungkinkan.
 
 GitHub Issue:
 Title: ${issueTitle}
@@ -677,77 +684,85 @@ Kembalikan jawaban secara eksklusif dalam format JSON objek terstruktur dengan s
 
 Catatan: "lineRange" dan "targetSymbol" bersifat opsional. Jika Anda tidak yakin dengan lokasi baris spesifik, cukup hilangkan field "lineRange" atau set null. Nomor baris harus berupa integer positif dimulai dari 1.`;
 
-		const response = await fetch(`${this.hostUrl}/api/chat`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				model: this.model,
-				messages: [{ role: 'user', content: prompt }],
-				format: 'json',
-				stream: false
-			})
+			const response = await fetch(`${this.hostUrl}/api/chat`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				signal,
+				body: JSON.stringify({
+					model: model,
+					messages: [{ role: 'user', content: prompt }],
+					format: 'json',
+					stream: false
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
+			}
+
+			const data = await response.json() as OllamaChatResponse;
+			const content = data.message.content;
+			return parseAIResponse(content);
 		});
-
-		if (!response.ok) {
-			const errText = await response.text();
-			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
-		}
-
-		const data = await response.json() as OllamaChatResponse;
-		const content = data.message.content;
-		return parseAIResponse(content);
 	}
 
 	async generateReply(issueDesc: string, currentCodeContext: string): Promise<string> {
-		const projectRulesBlock = await buildProjectRulesBlock();
-		const systemPrefix = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}\n\n`;
+		return executeWithFallback('Ollama', [this.model], async (model, signal) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrefix = `You are an expert developer assistant writing a friendly and technical GitHub reply.${projectRulesBlock}\n\n`;
 
-		const response = await fetch(`${this.hostUrl}/api/chat`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				model: this.model,
-				messages: [{ 
-					role: 'user', 
-					content: `${systemPrefix}Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` 
-				}],
-				stream: false
-			})
+			const response = await fetch(`${this.hostUrl}/api/chat`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				signal,
+				body: JSON.stringify({
+					model: model,
+					messages: [{ 
+						role: 'user', 
+						content: `${systemPrefix}Tulis draf balasan teknis yang sopan untuk issue GitHub berikut berdasarkan konteks kode proyek saat ini.\n\nGitHub Issue:\n${issueDesc}\n\nKonteks Kode Aktif:\n${currentCodeContext}` 
+					}],
+					stream: false
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
+			}
+
+			const data = await response.json() as OllamaChatResponse;
+			return data.message.content.trim();
 		});
-
-		if (!response.ok) {
-			const errText = await response.text();
-			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
-		}
-
-		const data = await response.json() as OllamaChatResponse;
-		return data.message.content.trim();
 	}
 
 	async generateCodeFix(request: CodeFixRequest): Promise<CodeFixResponse> {
-		const projectRulesBlock = await buildProjectRulesBlock();
-		const systemPrefix = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}\n\n`;
-		const prompt = `${systemPrefix}${buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined })}`;
+		return executeWithFallback('Ollama', [this.model], async (model, signal) => {
+			const projectRulesBlock = await buildProjectRulesBlock();
+			const systemPrefix = `You are an expert code fix engineer. You generate precise, minimal code patches.${projectRulesBlock}\n\n`;
+			const prompt = `${systemPrefix}${buildCodeFixPrompt({ ...request, projectRules: projectRulesBlock || undefined })}`;
 
-		const response = await fetch(`${this.hostUrl}/api/chat`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				model: this.model,
-				messages: [{ role: 'user', content: prompt }],
-				format: 'json',
-				stream: false
-			})
+			const response = await fetch(`${this.hostUrl}/api/chat`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				signal,
+				body: JSON.stringify({
+					model: model,
+					messages: [{ role: 'user', content: prompt }],
+					format: 'json',
+					stream: false
+				})
+			});
+
+			if (!response.ok) {
+				const errText = await response.text();
+				throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
+			}
+
+			const data = await response.json() as OllamaChatResponse;
+			const content = data.message.content;
+			return parseCodeFixResponse(content);
 		});
-
-		if (!response.ok) {
-			const errText = await response.text();
-			throw Object.assign(new Error(`Ollama Error: ${errText}`), { status: response.status });
-		}
-
-		const data = await response.json() as OllamaChatResponse;
-		const content = data.message.content;
-		return parseCodeFixResponse(content);
 	}
 }
 
