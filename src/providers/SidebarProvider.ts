@@ -655,6 +655,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 						command: 'postCommentResult',
 						success: true, // Berikan true agar UI React tetap mengupdate view lokal
 						number: message.number,
+						close: message.close,
 						updatedIssues
 					});
 					return;
